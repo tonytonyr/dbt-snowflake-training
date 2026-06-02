@@ -23,26 +23,28 @@ Run `python scripts/sync_agents.py --check` to verify sync state.
 
 ## Current Phase
 
-**Phase 0 — GitHub Setup & Project Foundation**
+**Phase 1 — Operational Store & E-Commerce Simulator**
 
-Status: Foundation files built. Waiting on:
-1. Engineer creates GitHub remote and pushes `main` (Step 1)
-2. Engineer enables branch protection (Step 3)
-3. Feature branch `feature/phase-0-github-setup` opened as first PR (Step 4)
+Status: Phase 0 complete. Ready to begin Phase 1.
+First action: Architect reviews and approves the state machine design before
+Platform Engineer begins implementation.
 
 ---
 
 ## Session Notes
 
 ### 2026-06-02 — Phase 0 session
-Completed: Baseline review, spec and agentic framework assessed as ready.
-`INITIAL_SPEC.md` moved to `archived/`. Full agentic framework committed to
-`main` (21 files, 2,732 insertions). Foundation files built: `.gitignore`,
-`README.md`, `CLAUDE.md`. Feature branch files built: `.pre-commit-config.yaml`,
-`.sqlfluff`, `.github/pull_request_template.md`. Lessons doc written at
-`lessons/phase-0/github-setup.md`.
-Decisions: ADR-001 through ADR-012 all active — no new decisions this session.
-Next: Engineer completes Steps 1 and 3 (GitHub remote + branch protection),
-then opens `feature/phase-0-github-setup` as the first PR and merges it.
-Open: Confirm `node_modules/` in `.gitignore` is sufficient for `.opencode/`
-deps or whether a nested `.gitignore` is needed there.
+Completed: Phase 0 fully delivered. GitHub remote created at
+`https://github.com/tonytonyr/dbt-snowflake-training`. Branch protection
+enabled on `main` (PR required, no direct push). Two PRs merged:
+PR #1 `feature/phase-0-github-setup` — pre-commit config, SQLFluff config,
+PR template. PR #2 `chore/gitignore-cleanup` — excluded `lessons/`,
+`.skill-evals/`, `.claude/` from version control. Stale branches
+(`feature/phase-0-github-setup`, `chore/gitignore-cleanup`) can be deleted
+locally. `lessons/phase-0/github-setup.md` written (gitignored, local only).
+No SQL linter added for Postgres — Snowflake dialect only, intentional (see
+lessons doc). No new ADRs this session — ADR-001 through ADR-012 all active.
+Next: Begin Phase 1. Architect must review and approve the state machine
+design (order lifecycle: placed→confirmed→shipped→delivered→returned) before
+Platform Engineer starts `simulator/state_machine.py`.
+Open: None.
