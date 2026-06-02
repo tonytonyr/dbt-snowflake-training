@@ -43,3 +43,6 @@ Thumbs.db
 
 # Node (OpenCode deps)
 node_modules/
+
+# Local learning notes (not for public repo)
+lessons/
