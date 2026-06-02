@@ -49,3 +49,6 @@ lessons/
 
 # Skill eval artifacts
 .skill-evals/
+
+# Claude Code harness (local config, not a project artifact)
+.claude/
