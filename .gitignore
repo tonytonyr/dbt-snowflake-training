@@ -46,3 +46,6 @@ node_modules/
 
 # Local learning notes (not for public repo)
 lessons/
+
+# Skill eval artifacts
+.skill-evals/
