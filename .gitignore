@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# dbt
+target/
+dbt_packages/
+logs/
+profiles.yml
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Snowflake credentials
+*.p8
+snowflake_private_key*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.vscode/launch.json
+.idea/
+*.swp
+*.swo
+
+# Pre-commit
+.pre-commit-cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Node (OpenCode deps)
+node_modules/
