@@ -1,0 +1,36 @@
+{
+  "$schema": "https://opencode.ai/config.schema.json",
+  "hooks": {
+    "file:after": "python scripts/sync_agents.py --from-opencode --file $FILE --quiet"
+  },
+  "profiles": {
+    "architect": {
+      "model": "mistral-large-3:675b-cloud",
+      "system": ".opencode/prompts/architect.md"
+    },
+    "data-modeler": {
+      "model": "devstral-2:123b-cloud",
+      "system": ".opencode/prompts/data-modeler.md"
+    },
+    "platform-engineer": {
+      "model": "deepseek-v4-pro:cloud",
+      "system": ".opencode/prompts/platform-engineer.md"
+    },
+    "pipeline-engineer": {
+      "model": "deepseek-v4-pro:cloud",
+      "system": ".opencode/prompts/pipeline-engineer.md"
+    },
+    "cicd-engineer": {
+      "model": "deepseek-v4-pro:cloud",
+      "system": ".opencode/prompts/cicd-engineer.md"
+    },
+    "reviewer": {
+      "model": "mistral-large-3:675b-cloud",
+      "system": ".opencode/prompts/reviewer.md"
+    },
+    "scribe": {
+      "model": "gemini-3-flash-preview:cloud",
+      "system": ".opencode/prompts/scribe.md"
+    }
+  }
+}
