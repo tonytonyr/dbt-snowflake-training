@@ -254,7 +254,64 @@ When any agent definition or skill changes, the corresponding OpenCode prompt mu
 
 ---
 
+### ADR-014 — Replace JSONB metadata columns with explicit typed columns
+**Date:** 2026-06-03
+**Status:** Active
+**Tags:** [architecture] [infrastructure]
+
+**Context:**
+`order_events.metadata` and `payment_events.metadata` were defined as `JSONB`
+to hold flexible state transition context. In practice the fields are fully
+predictable: order events carry `reason TEXT` and `retry_count INTEGER`;
+payment events carry `failure_reason TEXT` and `retry_attempt INTEGER`. JSONB
+is also the sole incompatibility blocking DuckDB as a lightweight local test
+database (DuckDB does not support the JSONB type).
+
+**Decision:**
+Replace `metadata JSONB` with explicit typed columns in both event tables:
+- `order_events`: add `reason TEXT`, `retry_count INTEGER`
+- `payment_events`: add `failure_reason TEXT`, `retry_attempt INTEGER`
+
+**Alternatives Considered:**
+- Keep JSONB: correct for Postgres/Snowflake but blocks DuckDB compatibility
+  and makes dbt models harder to read (requires JSON extraction syntax).
+- Use `TEXT` with serialized JSON strings: portable but unqueryable without
+  casting; worse than either JSONB or explicit columns.
+
+**Consequences:**
+`source_schema_spec.md`, `db.py` DDL, `simulate_order_lifecycle` event
+inserts, and all related tests must be updated. dbt staging models can
+reference `reason` and `failure_reason` directly as plain columns.
+
+---
+
+### ADR-013 — Python and SQL coding standards for simulator and dbt work
+**Date:** 2026-06-02
+**Status:** Active
+**Tags:** [tooling] [process] [architecture]
+
+**Context:**
+The simulator (`simulator/`) is Python; the dbt layer and Postgres DDL are SQL. With a coding agent (Mistral via OpenCode) writing the implementation, standards must be explicit and machine-enforceable — vague guidance produces inconsistent code that is hard to review and teach from.
+
+**Decision:**
+- **Python formatter + linter:** Ruff (replaces Black + Flake8 in one tool). Configuration in `pyproject.toml`. Line length 88. Target Python 3.11+.
+- **Type hints:** Required on all public functions and class methods. `mypy` or Ruff's type-check rules enforce this.
+- **Test framework:** pytest. Tests live in `simulator/tests/`. One test file per source module.
+- **SQL (Postgres):** `snake_case` identifiers, explicit column lists (no `SELECT *`), table-level FK constraints, `TIMESTAMP WITH TIME ZONE` for all timestamps. SQLFluff Postgres dialect for linting.
+- **Full guide:** `docs/CODING_GUIDE.md` is the authoritative reference. All agents read it at cold start for any implementation task.
+- **Pre-commit enforcement:** Ruff lint, Ruff format, and SQLFluff (Postgres) added to `.pre-commit-config.yaml`.
+
+**Alternatives Considered:**
+- Black + Flake8 separately: two tools with overlapping config, Ruff supersedes both with better performance.
+- No type hints: acceptable for scripts, not for a state machine with complex transition logic that an agent will extend over multiple sessions.
+
+**Consequences:**
+All Python written by any agent must pass `ruff check` and `ruff format --check` before commit. `docs/CODING_GUIDE.md` is a mandatory cold-start read for Platform Engineer and Pipeline Engineer. The guide is written to be unambiguous for an AI coding agent — examples of correct and incorrect patterns are included.
+
+---
+
 ### ADR-011 — Initial data volume: 5K customers, 50K orders, 200K order items
+**Status:** Superseded by ADR-015
 **Date:** 2026-06-02
 **Status:** Active
 **Tags:** [architecture] [infrastructure]
@@ -271,3 +328,149 @@ Starting volume: ~5K customers, ~1K products, ~50K orders, ~200K order items, 1 
 
 **Consequences:**
 The simulator's accelerated mode targets this volume. If a phase exercise requires larger data (e.g., query performance profiling in Phase 6), the simulator can be re-run with higher parameters without changing the architecture.
+
+---
+
+### ADR-015 — Address/customer relationship: household model; volumes as tunable config
+**Date:** 2026-06-03
+**Status:** Active
+**Supersedes:** ADR-011
+**Tags:** [architecture] [infrastructure]
+
+**Context:**
+The original spec modeled `addresses` as customer-owned rows with a `customer_id` FK and an `address_type` column (`shipping` / `billing`). The bootstrap data generator (notebook) models addresses as standalone geographic entities and customers as referencing an address — multiple customers may share one address to represent households (families at the same physical location). The two models are incompatible. Additionally, ADR-011 hardcoded volumes (5K customers, ~1K products) which the notebook already exceeds and which should be tunable without an ADR change.
+
+**Decision:**
+1. **Address ownership flipped:** `addresses` is a standalone table with no `customer_id` or `address_type`. Each customer row carries an `address_id` FK instead. Multiple customers sharing an `address_id` represents a household — no join table needed.
+2. **No billing/shipping distinction:** Billing and shipping address are assumed identical. `address_type` is dropped. The `orders.shipping_address_id` column is retained as an explicit snapshot so historical orders survive future address changes.
+3. **Volumes are config, not ADR:** Seed record counts (addresses, customers, products) are variables in `simulator/config.yaml`, not architectural decisions. The notebook's current defaults (150K addresses, ~255K customers, 25K products) are acceptable starting points; operators tune them without code changes.
+
+**Alternatives Considered:**
+- Keep `address_type` with only `shipping` as a valid value: adds a column with no analytical value and misleads future readers.
+- `customer_addresses` many-to-many join table: correct for a full e-commerce model but over-engineered for this training project; the household pattern is fully captured by a shared FK.
+
+**Consequences:**
+`source_schema_spec.md` `customers` DDL gains `address_id FK`; `addresses` DDL loses `customer_id` and `address_type`. `db.py` bootstrap DDL and `generator.py` seed logic must be updated to match. The notebook CSVs are already in the correct shape — no regeneration needed. dbt staging models for `customers` gain a direct `address_id` join path.
+
+---
+
+### ADR-016 — New customer injection rate: random uniform 0–10% per order
+**Date:** 2026-06-03
+**Status:** Active
+**Tags:** [architecture] [infrastructure]
+
+**Context:**
+The simulator needs to distinguish new customers (first-ever order) from returning customers to produce realistic order data for dbt analysis. A fixed ratio is unrealistic — real acquisition rates fluctuate. A configurable upper bound on a per-order uniform draw produces natural variability without extra state.
+
+**Decision:**
+For each simulated order, draw `rate = random.uniform(0, new_customer_rate_max)` and compare against a second `random.random()`. If `random.random() < rate`, generate and insert a new customer; otherwise select an existing one. `new_customer_rate_max` defaults to `0.10` (10%) in `simulator/config.yaml` and is operator-tunable. The effective mean new-customer rate is ~5% with high order-to-order variance.
+
+Optionally, the rate draw may be done once per simulated day rather than per order, producing burst/quiet acquisition days rather than per-order noise. Implementation choice left to Platform Engineer.
+
+**Alternatives Considered:**
+- Fixed ratio in config: simple but produces unrealistically uniform acquisition — no good/bad acquisition days.
+- Time-series model (e.g., sinusoidal campaign spikes): more realistic but requires significant additional complexity with no training payoff at this phase.
+
+**Consequences:**
+`simulator/config.yaml` gains `new_customer_rate_max: 0.10`. `generator.py` `create_new_customer` is called conditionally per order. Email uniqueness must be enforced by the DB `UNIQUE` constraint with retry on `IntegrityError` — the in-memory `seen` set from the notebook is not viable across simulator restarts.
+
+**Future — market saturation (not in scope now):**
+As `customers` count grows toward a total addressable market ceiling, `new_customer_rate_max` should decay via a sigmoid function of `current_customers / total_addressable_market`. Both values would be config. This is deferred until the base simulator is stable.
+
+---
+
+### ADR-017 — Inventory management excluded from simulation scope
+**Date:** 2026-06-03
+**Status:** Active
+**Tags:** [architecture] [infrastructure]
+
+**Context:**
+The original spec included `inventory_quantity` on `products` as a static label used to trigger random "inventory_issue" stuck-order events. Inventory management (stock levels, depletion, replenishment) is not a goal of this simulation — all products are assumed infinitely available.
+
+**Decision:**
+Remove `inventory_quantity` from the `products` table. The `stuck_reason` values on orders are limited to non-inventory causes (e.g., `payment_failed`, `system_error`). No inventory table or stock-tracking logic will be built.
+
+**Alternatives Considered:**
+- Keep `inventory_quantity` as a cosmetic label with no depletion logic: adds a column that implies behavior the simulator doesn't implement, misleading for dbt analysis.
+
+**Consequences:**
+`products` DDL and the `products.csv` bootstrap data have no inventory column. The simulator never generates `inventory_issue` as a stuck reason. dbt models have no inventory dimension to analyze — intentional.
+
+---
+
+### ADR-018 — Customer pre-generation replaces runtime injection for organic growth
+**Date:** 2026-06-04
+**Status:** Active
+**Supersedes:** ADR-016 (Phase B runtime injection aspect only; rate knob from ADR-016 is retired)
+**Tags:** [architecture] [infrastructure]
+
+**Context:**
+The simulator bootstrap generates ~255K customers, the majority of whom have never placed an order. ADR-016 added runtime new-customer injection during stream mode to simulate organic acquisition. The realism levers spec (Lever 1) planned a Phase B to make injection household-aware with a SELECT guard before every insert. In parallel, stream mode needs to support CDC training exercises where the eligible customer pool grows over simulated time — matching how real systems acquire users gradually.
+
+**Decision:**
+Customer acquisition curve is baked into `created_at` at CSV generation time, not injected at runtime. The bootstrap notebook generates customers with `created_at` dates spread across the simulation window (past) and forward into the future (to sustain stream mode). Both historical and stream simulators filter eligible customers as `created_at <= current_sim_time` — the pool grows naturally as simulated time advances. No runtime `create_new_customer` injection is needed for organic growth; the pre-generated dormant population serves that role.
+
+**Alternatives Considered:**
+- Runtime injection (ADR-016 / Lever 1 Phase B): correct but adds complexity — SELECT cap-guard per insert, household-awareness logic, probability tuning. Pushes growth-curve logic into the hot path.
+- Hybrid (pre-generate + top-up injection): adds complexity without proportional benefit at current scale.
+
+**Consequences:**
+- `simulator/generator.py` `create_new_customer` and `pick_customer` injection logic can be removed or reduced to an edge-case fallback.
+- `simulator/config.yaml` `new_customer_rate_max` knob is retired.
+- `samples/simulator_base_data.ipynb` must generate `created_at` using the seasonal sampler with a forward-looking window (e.g., 2 years beyond current date).
+- The large dormant customer population is a training asset: churn, engagement cohort, and "signed-up but never ordered" dbt exercises are naturally present in the data.
+- Lever 1 Phase B in `docs/SIMULATOR_REALISM_LEVERS.md` is superseded by this decision.
+
+---
+
+### ADR-019 — Simulator time compression ratio as project-wide coordination constant
+**Date:** 2026-06-04
+**Status:** Active
+**Tags:** [architecture] [infrastructure] [cdc] [pipeline]
+
+**Context:**
+Stream mode needs to emit order lifecycle state transitions over real wall-clock time (not all-at-once at order creation) so CDC consumers see a realistic stream of INSERTs and UPDATEs. The cadence at which "daily" batch jobs run in Snowflake must stay in sync with the simulator's simulated time. Without a shared constant, the two sides drift — a "daily" dbt run firing every 24 real hours is meaningless if the simulator compresses a week into 30 minutes.
+
+**Decision:**
+A single `compression_ratio` integer lives in `simulator/config.yaml` (e.g., `compression_ratio: 60` means 1 real second = 60 simulated seconds). All time-dependent cadences are derived from it:
+
+```
+daily_interval_real_seconds  = 86400 / compression_ratio
+hourly_interval_real_seconds = 3600  / compression_ratio
+```
+
+The simulator's transition queue uses this ratio to schedule lifecycle state updates (e.g., `confirmed → shipped` fires after `simulated_delay / compression_ratio` real seconds). The Snowflake-side orchestration reads the same value to schedule batch jobs at the correct real-world interval.
+
+**Alternatives Considered:**
+- Hardcoded intervals per side: simple but guarantees drift as the ratio is tuned.
+- Wall-clock real-time stream with no compression: orders take days to complete lifecycle — impractical for training sessions.
+
+**Consequences:**
+- Stream mode requires a pending-transitions queue (orders placed but not yet fully resolved). This is a meaningful architectural addition to `simulator/main.py` and `generator.py`.
+- At `compression_ratio: 60`, a 30-minute real session covers ~30 simulated hours — enough for 1–2 "daily" Snowflake batch cycles.
+- `compression_ratio` is operator-tunable; changing it automatically rescales all derived cadences. No other config values need updating.
+
+---
+
+### ADR-020 — Snowflake Tasks as primary orchestrator for Snowflake-side batch jobs; Airflow deferred
+**Date:** 2026-06-04
+**Status:** Active
+**Tags:** [architecture] [infrastructure] [pipeline]
+
+**Context:**
+The project needs a scheduler to trigger "daily" dbt-equivalent transformations in Snowflake in sync with the simulator's compression ratio (ADR-019). Options considered: external Python scheduler (APScheduler or sleep loop), Apache Airflow with Astronomer Cosmos (already planned in ADR-004), and Snowflake-native Tasks.
+
+**Decision:**
+Snowflake Tasks are the initial orchestrator for Snowflake-side batch jobs. Tasks run on a cron/interval schedule derived from `compression_ratio`, execute compiled dbt SQL or stored procedures directly, and require no external infrastructure. Task trees handle dependencies between transformation steps. Airflow (ADR-004) remains the target for cross-system orchestration (simulator → Snowflake) and is introduced when Phase 4 CDC pipeline work requires coordinating both sides.
+
+Batch step logic is implemented as discrete callable units (stored procedures or standalone SQL scripts) so that wrapping them in Airflow operators later is a structural lift-and-shift, not a rewrite.
+
+**Alternatives Considered:**
+- Python sleep-loop script: simple but no visibility, no retry semantics, dies if the terminal closes.
+- APScheduler in-process: cleaner than sleep-loop but still external to Snowflake; adds a Python dependency for what is fundamentally a SQL scheduling problem.
+- Airflow immediately (ADR-004): correct long-term but over-engineered for Phase 1–3 where all work is Snowflake-internal.
+
+**Consequences:**
+- Phase 2–3 dbt models are compiled and their SQL registered as Snowflake Task payloads. Students observe Task run history in `INFORMATION_SCHEMA.TASK_HISTORY`.
+- Airflow + Cosmos (ADR-004) is not removed from scope — it activates in Phase 4 as the cross-system coordinator. ADR-004 remains active.
+- Task schedule intervals must be recomputed and Tasks recreated whenever `compression_ratio` changes. This is a known operational cost accepted for simplicity.

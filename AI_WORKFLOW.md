@@ -233,6 +233,10 @@ Full definitions in `.agents/`. Summary:
 
 > **Auto-sync note (2026-06-02):** Agent `sync-test` was created. Update the Agent Roster table above manually or run the Architect agent to compose the full entry.
 
+<!-- roster:platform-engineer -->
+
+> **Auto-sync note (2026-06-02):** Agent `platform-engineer` was created. Update the Agent Roster table above manually or run the Architect agent to compose the full entry.
+
 ## Adding a New Agent — Checklist
 
 When a new agent role is created, complete all four steps before the agent is considered done:
