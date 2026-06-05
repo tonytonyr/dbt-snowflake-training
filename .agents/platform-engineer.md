@@ -17,10 +17,11 @@
 
 Read in order:
 
-1. `DECISIONS.md` — entries tagged `[infrastructure]` or `[docker]`
-2. `SPEC.md` — Infrastructure Stack section, Services by Phase table, Phase 1 section
-3. `docker-compose.yml` — current service definitions (if exists)
-4. `simulator/` directory — current state of simulator code
+1. `DECISIONS.md` — entries tagged `[infrastructure]`, `[docker]`, or `[tooling]`
+2. `docs/CODING_GUIDE.md` — **mandatory before writing any Python or SQL**
+3. `SPEC.md` — Infrastructure Stack section, Services by Phase table, Phase 1 section
+4. `docker-compose.yml` — current service definitions (if exists)
+5. `simulator/` directory — current state of simulator code
 
 After reading, output:
 - Which Docker services are currently defined

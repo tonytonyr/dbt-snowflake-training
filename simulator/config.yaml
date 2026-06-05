@@ -1,0 +1,44 @@
+# Simulator Configuration
+
+database:
+  type: duckdb            # duckdb | postgres
+  path: simulator.duckdb  # DuckDB file path (relative to working directory)
+  # dsn: ""               # Postgres: set DATABASE_URL env var instead
+
+bootstrap:
+  csv_dir: samples        # Directory containing customers.csv, addresses.csv, products.csv
+
+transitions:
+  order:
+    placed:
+      confirmed: 0.97
+      cancelled: 0.03
+    confirmed:
+      shipped: 0.98
+      cancelled: 0.02
+    shipped:
+      delivered: 0.96
+      returned: 0.03
+      stuck: 0.01
+    delivered:
+      returned: 0.03
+      stuck: 0.97
+
+  payment:
+    pending:
+      authorized: 0.98
+      failed: 0.02
+    authorized:
+      captured: 0.99
+      failed: 0.01
+    failed:
+      pending: 0.5
+      terminal: 0.5
+    captured:
+      refunded: 0.03
+
+simulation:
+  max_retries: 3
+  tick_interval: 1
+  num_orders: 200000
+  new_customer_rate_max: 0.10
