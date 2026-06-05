@@ -24,48 +24,55 @@ A self-contained learning project to close skill gaps in **dbt** and **Snowflake
 
 Chosen because the business logic maps directly to Amazon retail/forecasting experience — cognitive load stays on the new tools, not the domain. Maps well to target employers (DoorDash, Instacart, DSG, Visa).
 
-### Source Schema (8 tables — live in Postgres operational store)
+### Source Schema (8 tables)
+
+> **As-built** — reflects actual simulator DDL in `simulator/db.py`.
+> Phase 1–3 uses DuckDB locally; Phase 4 migrates to Postgres for CDC.
 
 ```
-customers              products
-├── customer_id (PK)   ├── product_id (PK)
-├── name               ├── name
-├── email              ├── category_id → categories
-├── address_line1      ├── supplier_id  → suppliers
-├── city               ├── unit_cost
-├── state              ├── list_price
-├── zip                └── effective_date (SCD Type 2 candidate)
-├── segment
-└── acquired_channel
+addresses                    customers
+├── address_id (PK)          ├── customer_id (PK)
+├── street_address           ├── first_name
+├── city                     ├── last_name
+├── state                    ├── email (UNIQUE)
+├── postal_code              ├── address_id → addresses
+└── country                  └── created_at TIMESTAMPTZ
 
-orders                 order_items
-├── order_id (PK)      ├── order_item_id (PK)
-├── customer_id →      ├── order_id → orders
-├── order_date         ├── product_id → products
-├── status             ├── quantity
-│   (placed/confirmed/ ├── unit_price
-│    shipped/delivered/└── discount
-│    returned)
-├── total_amount
-└── payment_status
+products                     orders
+├── product_id (PK)          ├── order_id (PK)
+├── sku (UNIQUE)             ├── customer_id → customers
+├── name                     ├── order_date TIMESTAMPTZ
+├── category                 ├── status
+├── price                    │   (placed/confirmed/shipped/
+└── cost_price               │    delivered/returned/cancelled)
+                             ├── total_amount
+                             └── updated_at TIMESTAMPTZ
 
-inventory              shipments
-├── warehouse_id       ├── shipment_id (PK)
-├── product_id →       ├── order_id → orders
-├── quantity_on_hand   ├── carrier
-├── quantity_reserved  ├── tracking_number
-└── snapshot_date      ├── shipped_date
-                       ├── estimated_delivery
-                       └── actual_delivery
+order_items                  payments
+├── order_item_id (PK)       ├── payment_id (PK)
+├── order_id → orders        ├── order_id → orders
+├── product_id → products    ├── payment_method
+├── quantity                 ├── payment_state
+└── unit_price               │   (pending/authorized/captured/
+                             │    failed/refunded)
+                             └── amount
 
-returns                payments
-├── return_id (PK)     ├── payment_id (PK)
-├── order_id → orders  ├── order_id → orders
-├── return_reason      ├── payment_type (card/gift/wallet)
-├── refund_amount      ├── amount
-├── disposition        ├── processor_response
-└── returned_date      └── timestamp
+order_events                 payment_events
+├── event_id (PK)            ├── event_id (PK)
+├── order_id → orders        ├── payment_id → payments
+├── event_type               ├── event_type
+├── from_state               ├── from_state
+├── to_state                 ├── to_state
+├── reason TEXT              ├── failure_reason TEXT
+├── retry_count INTEGER      ├── retry_attempt INTEGER
+└── created_at TIMESTAMPTZ   └── created_at TIMESTAMPTZ
 ```
+
+**Design notes:**
+- `addresses` is standalone; `customers.address_id` FK captures the household model (multiple customers share one address — ADR-015)
+- No inventory table — all products assumed always available (ADR-017)
+- Event tables use explicit typed columns, not JSONB (ADR-014)
+- `order_events` / `payment_events` are append-only CDC-friendly audit logs
 
 ---
 
@@ -113,17 +120,24 @@ returns                payments
 | Service | Technology | Phase Introduced | Est. RAM |
 |---------|------------|-----------------|----------|
 | Version control | GitHub | Phase 0 | — |
-| Operational DB | Postgres 16 | Phase 1 | ~256 MB |
-| E-Commerce Simulator | Python (Docker) | Phase 1 | ~128 MB |
+| Local operational DB | **DuckDB** (default) | Phase 1 | minimal |
+| E-Commerce Simulator | Python (local) | Phase 1 | ~128 MB |
+| Postgres (CDC source) | Postgres 16 (Docker) | Phase 4 | ~256 MB |
 | Cloud Warehouse | Snowflake (trial) | Phase 2 | (external) |
 | dbt Core | VS Code Dev Container | Phase 2 | ~256 MB |
-| Kafka | Kafka 3.x (KRaft — no ZooKeeper) | Phase 3 | ~512 MB |
-| CDC | Debezium Connect | Phase 3 | ~512 MB |
-| Airflow | Astro Runtime + Cosmos | Phase 4 | ~2-3 GB |
-| **Phase 0-1 total** | | | **~384 MB** |
-| **Phase 2 total** | | | **~640 MB** |
-| **Phase 3 total** | | | **~1.5 GB** |
-| **Phase 4 total** | | | **~4-4.5 GB** |
+| Snowflake Tasks | Native Snowflake | Phase 2–3 | (external) |
+| Kafka | Kafka 3.x (KRaft — no ZooKeeper) | Phase 4 | ~512 MB |
+| CDC | Debezium Connect | Phase 4 | ~512 MB |
+| Airflow | Astro Runtime + Cosmos | Phase 4+ | ~2-3 GB |
+| **Phase 0-1 total** | | | **~128 MB** |
+| **Phase 2-3 total** | | | **~384 MB** |
+| **Phase 4 total** | | | **~1.5 GB** |
+| **Phase 4+ (Airflow) total** | | | **~4-4.5 GB** |
+
+**Database strategy (ADR-006 / ADR-020):**
+- DuckDB is the default for Phase 1–3 local development — no server required
+- Postgres introduced in Phase 4 as the CDC source (Debezium requires a WAL-enabled RDBMS)
+- Snowflake Tasks orchestrate Snowflake-side batch jobs in Phase 2–3; Airflow + Cosmos takes over cross-system coordination in Phase 4+
 
 ### dbt Development Environment
 
@@ -268,58 +282,69 @@ Hooks run on every `git commit`:
 
 ---
 
-### Phase 1 — Operational Store & E-Commerce Simulator (Days 2-4, ~6 hours)
+### Phase 1 — Operational Store & E-Commerce Simulator ✅ Substantially Complete
 
-**Goal:** A running Postgres database backed by a Python simulator that can generate realistic historical data in accelerated mode and produce a live event stream in streaming mode. This is the source of truth the rest of the stack is built on.
+**Goal:** A Python simulator that generates realistic historical data in accelerated mode and produces a live event stream in streaming mode. DuckDB is the local store for Phase 1–3; Postgres is introduced in Phase 4 for CDC.
 
-#### Postgres Schema
-- All 8 tables with correct constraints: PKs, FKs, `NOT NULL` where appropriate, indexes on common filter columns (`customer_id`, `order_date`, `status`)
-- Schema applied via `simulator/schema.sql` — idempotent (`CREATE TABLE IF NOT EXISTS`)
+#### Schema
+8 tables implemented in `simulator/db.py` DDL — see Source Schema section above.
+Applied idempotently at bootstrap. DuckDB default; Postgres switchable via `config.yaml`.
 
 #### E-Commerce Simulator
 
-The simulator is a Python application with two operating modes. All writes go to Postgres only — Snowflake learns about changes exclusively through the CDC pipeline.
-
-**State Machine (`state_machine.py`)**
-
-Orders move through a defined lifecycle — no random inserts:
+**State Machine (`simulator/state_machine.py`)**
 ```
 placed → confirmed → shipped → delivered
-                                    └──► returned  (configurable % of delivered orders)
+                                   └──► returned
 
-payment_status: pending → paid  (on confirmed)
-                pending → failed (small %)
+payment: pending → authorized → captured
+         pending → failed
 ```
-Invalid transitions are rejected. This is what makes the `accepted_values` dbt test on `status` meaningful — a simulator bug would surface as a test failure.
+Invalid transitions are rejected. The `accepted_values` dbt test on `orders.status` is meaningful because the simulator enforces valid transitions.
 
-**Accelerated Historical Mode**
+**Historical Mode**
+```bash
+python -m simulator.main --historical 24   # 24 months of history
 ```
-python simulator.py --mode historical --days 365 --acceleration 1000
+- Seasonal demand curve (Dec peaks, Jan/Feb slumps) — mirrors `_MONTHLY_WEIGHT` in `generator.py`
+- Customers filtered by `created_at <= end_date` — future-dated customers excluded naturally
+- Lifecycle event timestamps fan out from `order_date` with realistic per-transition delays
+- **Volumes (current):** 200K addresses, 340K customers, 25K products, 200K orders
+
+**Stream Mode**
+```bash
+python -m simulator.main --stream [--duration SECONDS]
 ```
-- Simulates 1 year of activity compressed to ~minutes
-- Generates: ~5K customers, ~1K products, ~50K orders, ~200K order items
-- Produces proportional inventory snapshots, shipments, payments, returns
-- Writes directly to Postgres; outputs a completion summary (row counts per table)
+- Places new orders continuously at configurable rate
+- `--duration` bounds the run for testing; omit to run indefinitely
+- **Pending (ADR-019):** transition queue so CDC consumers see state changes drip over real time at `compression_ratio`
 
-**Streaming Mode**
+**Bootstrap**
+```bash
+python -m simulator.main --bootstrap   # loads samples/*.csv into DB
 ```
-python simulator.py --mode stream --rate 10  # 10 new orders/minute
-```
-- Runs indefinitely at wall-clock pace (configurable rate)
-- Emits new orders, advances existing order statuses, generates payments and returns on schedule
-- Designed to keep Debezium busy with a realistic event drip
-- Graceful shutdown on `SIGTERM` (Docker stop compatible)
 
-**Configuration** (via `.env`):
-- `SIM_CUSTOMERS`, `SIM_PRODUCTS` — population sizes
-- `SIM_RETURN_RATE` — % of delivered orders that generate a return (default 8%)
-- `SIM_PAYMENT_FAILURE_RATE` — % of payments that fail (default 2%)
-- `SIM_STREAM_RATE` — new orders per minute in streaming mode
+**Configuration** (`simulator/config.yaml`):
+- `database.type`: `duckdb` (default) or `postgres`
+- `database.path`: DuckDB file path
+- `simulation.num_orders`: target order count for historical mode
+- `stream.compression_ratio`: governs simulated-time cadence (ADR-019, pending implementation)
 
-#### Delivered via PR
-Branch: `feature/phase-1-postgres-simulator`
+**Bootstrap data** (`samples/`):
+- Generated by `samples/simulator_base_data.ipynb`
+- `created_at` uses seasonal weights × linear acquisition decay (ADR-018)
+- `PRIMARY_DECAY_FLOOR=0.40`, `HH_DECAY_FLOOR=0.10` — independent knobs
+- Household members sampled from blended pool, bounded by primary's `created_at`; bisect trim for performance
+- Window: `2022-06-01 → 2028-06-01` giving 2 years of forward runway for stream mode
 
-**Deliverable:** `docker compose up postgres simulator` runs clean. Accelerated mode populates all 8 tables. Streaming mode produces a visible drip of new rows queryable in Postgres. Row counts and relationships are valid.
+**Test suite:** 69/69 passing, ruff clean. All tests run against real in-memory DuckDB.
+
+#### Remaining Phase 1 Work
+- Stream mode pending-transitions queue (ADR-019)
+- Open PRs for all Phase 1 work (currently all on `main`)
+- Realism Levers 2 (time-of-day) and 3 (product lifecycle) — can follow Phase 2
+
+**Deliverable:** `python -m simulator.main --bootstrap && python -m simulator.main --historical 24` populates all 8 tables. Row counts and temporal ordering are valid.
 
 ---
 
