@@ -41,6 +41,14 @@ Thumbs.db
 # Jupyter
 .ipynb_checkpoints/
 
+# Generated data artifacts (regenerate locally from samples/simulator_base_data.ipynb)
+samples/*.csv
+samples/*.bak
+
+# DuckDB database files (generated artifacts)
+*.duckdb
+*.duckdb.bak
+
 # Node (OpenCode deps)
 node_modules/
 
