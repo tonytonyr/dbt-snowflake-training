@@ -1,0 +1,15 @@
+version: 2
+
+sources:
+  - name: retail
+    database: RAW
+    schema: retail
+    tables:
+      - name: addresses
+      - name: customers
+      - name: products
+      - name: orders
+      - name: order_items
+      - name: payments
+      - name: order_events
+      - name: payment_events

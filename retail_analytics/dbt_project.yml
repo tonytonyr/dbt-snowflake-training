@@ -1,0 +1,34 @@
+name: retail_analytics
+version: '1.0.0'
+config-version: 2
+
+profile: retail_analytics
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+clean-targets:
+  - target
+  - dbt_packages
+
+models:
+  retail_analytics:
+    staging:
+      +schema: staging
+      +materialized: view
+    intermediate:
+      +schema: intermediate
+      +materialized: ephemeral
+    marts:
+      +schema: marts
+      +materialized: table
+
+snapshots:
+  retail_analytics:
+    +target_schema: snapshots
+    +strategy: timestamp
+    +updated_at: updated_at
