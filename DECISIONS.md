@@ -452,6 +452,37 @@ The simulator's transition queue uses this ratio to schedule lifecycle state upd
 
 ---
 
+### ADR-021 — dbt Semantic Layer (MetricFlow) added as Phase 3d; Snowflake Semantic Views as integration target
+**Date:** 2026-06-10
+**Status:** Active
+**Tags:** [dbt] [architecture] [modeling]
+
+**Context:**
+After the mart layer (Phase 3b), downstream consumers — BI tools, notebooks, LLMs — each risk computing metrics like `revenue` or `return_rate` independently, creating definitional drift across tools. The dbt Semantic Layer (powered by MetricFlow, open-sourced October 2025, Apache 2.0) addresses this by centralizing metric definitions in dbt YAML and translating queries into warehouse SQL at runtime. Concurrently, Snowflake Semantic Views (GA March 2026) are a native Snowflake database object offering the same centralization benefit without requiring the dbt CLI at query time. The `dbt_semantic_view` package (Snowflake Labs, October 2025) bridges both: define in dbt YAML, publish to native Snowflake objects.
+
+**Decision:**
+Add the dbt Semantic Layer as Phase 3d, delivered immediately after the mart layer. Scope:
+1. MetricFlow time spine model in `models/marts/`
+2. Three semantic model YAML files (`sem_orders`, `sem_customers`, `sem_products`) on top of the mart layer
+3. Six metrics defined in `metrics/retail_metrics.yml`: `order_count`, `revenue`, `average_order_value`, `return_rate`, `cumulative_revenue`, `revenue_wow`
+4. Three saved queries in `saved_queries/` as BI-ready metric packs
+5. Publish to Snowflake Semantic Views via the `dbt_semantic_view` package as a comparison exercise
+
+**Alternatives Considered:**
+- Defer to a standalone future project: misses the opportunity to show semantic layer and mart layer as a natural progression — the data is already perfectly shaped for it.
+- MetricFlow only, skip Snowflake Semantic Views: valid, but the Snowflake-native path is directly relevant to target employers (Snowflake GA March 2026 is very current) and adds a useful "two paths, same answer" comparison.
+- Full BI tool integration (Tableau, Hex): adds value but introduces external dependencies and account setup friction. `dbt sl query` via CLI is sufficient to demonstrate the pattern.
+
+**Consequences:**
+- `dbt_project.yml` must configure the MetricFlow time spine model.
+- `packages.yml` gains `dbt-metricflow[snowflake]` and `snowflake-labs/dbt_semantic_view`.
+- Project structure gains `semantic_models/`, `metrics/`, and `saved_queries/` directories under `retail_analytics/`.
+- Phase 3d is gated on Phase 3b (mart models must exist before semantic models can reference them).
+- CI/CD (`ci.yml`) should include `dbt sl validate` to catch metric definition regressions on PR.
+- Interview narrative updated to mention MetricFlow and Snowflake Semantic Views — a meaningful differentiator for Snowflake-focused roles.
+
+---
+
 ### ADR-020 — Snowflake Tasks as primary orchestrator for Snowflake-side batch jobs; Airflow deferred
 **Date:** 2026-06-04
 **Status:** Active

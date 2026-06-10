@@ -132,14 +132,18 @@ All Phase 1 work is on `main` — no PRs opened yet. Before or alongside Phase 2
 
 ## Current Phase
 
-**Phase 1 — Operational Store & E-Commerce Simulator**
+**Phase 1 → Phase 2 handoff**
 
-Status: **Complete for Phase 2 handoff.** Simulator functional and tested (69/69
-passing). Bootstrap data regenerated with seasonal acquisition curve. Clean 24-month
+Phase 1 status: **Complete.** Simulator functional and tested (69/69 passing).
+Bootstrap data regenerated with seasonal acquisition curve. Clean 24-month
 historical run completed: 200K orders across 200K addresses / 340K customers /
 25K products. Generator tail-spike bug fixed. DuckDB bulk write 550× faster via
 pandas zero-copy path. Data quality notebook: 24/24 checks passing, YoY weekly
-chart added. DuckDB is the default local store; Postgres switchable via config.
+chart added.
+
+**Phase plan updated 2026-06-10:** dbt Semantic Layer (MetricFlow + Snowflake
+Semantic Views) added as Phase 3d — see ADR-021 and Phase 3d section in SPEC.md.
+Phase 3d is gated on Phase 3b (mart models) and runs before Phase 4 (CDC).
 
 Deferred to post-Phase 2 (not blocking):
 - Stream mode pending-transitions queue (ADR-019)
