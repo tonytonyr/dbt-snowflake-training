@@ -1,0 +1,30 @@
+{
+  "name": "dbt Snowflake Training",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+  "workspaceFolder": "/workspace",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "innoverio.vscode-dbt-power-user",
+        "ms-python.python",
+        "dorzey.vscode-sqlfluff",
+        "redhat.vscode-yaml",
+        "github.vscode-github-actions"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "[sql]": {
+          "editor.defaultFormatter": "dorzey.vscode-sqlfluff"
+        }
+      }
+    }
+  },
+  "postCreateCommand": "cd /workspace/retail_analytics && dbt deps || true",
+  "remoteEnv": {
+    "DBT_PROFILES_DIR": "/workspace/retail_analytics"
+  }
+}
