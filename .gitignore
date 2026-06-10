@@ -44,6 +44,8 @@ Thumbs.db
 # Generated data artifacts (regenerate locally from samples/simulator_base_data.ipynb)
 samples/*.csv
 samples/*.bak
+samples/backup/
+samples/*.sql
 
 # DuckDB database files (generated artifacts)
 *.duckdb
