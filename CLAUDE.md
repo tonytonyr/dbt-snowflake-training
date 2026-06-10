@@ -132,23 +132,34 @@ All Phase 1 work is on `main` — no PRs opened yet. Before or alongside Phase 2
 
 ## Current Phase
 
-**Phase 1 → Phase 2 handoff**
+**Phase 2a — Local Prep (in progress)**
 
-Phase 1 status: **Complete.** Simulator functional and tested (69/69 passing).
-Bootstrap data regenerated with seasonal acquisition curve. Clean 24-month
-historical run completed: 200K orders across 200K addresses / 340K customers /
-25K products. Generator tail-spike bug fixed. DuckDB bulk write 550× faster via
-pandas zero-copy path. Data quality notebook: 24/24 checks passing, YoY weekly
-chart added.
+Branch: `feature/phase-2a-local-prep`
 
-**Phase plan updated 2026-06-10:** dbt Semantic Layer (MetricFlow + Snowflake
-Semantic Views) added as Phase 3d — see ADR-021 and Phase 3d section in SPEC.md.
-Phase 3d is gated on Phase 3b (mart models) and runs before Phase 4 (CDC).
+**Completed this session:**
+- VS Code Dev Container created (`.devcontainer/Dockerfile` + `devcontainer.json`)
+  — dbt-core 1.8.9, dbt-snowflake 1.8.4, dbt-metricflow 0.7.0, sqlfluff 3.3.0
+  — Note: pinned to 1.8.x because dbt-metricflow 0.7.0 requires dbt-core<1.9.0
+- dbt project scaffolded manually (dbt init unreliable in container — used mkdir + manual files)
+- `dbt_project.yml` configured: staging=view, intermediate=ephemeral, marts=table
+- `packages.yml`: dbt_utils 1.3.3 installed via `dbt deps`
+- `macros/generate_schema_name.sql`: prevents Snowflake schema name prefixing
+- `models/staging/sources.yml`: all 8 RAW.retail source tables declared
+- 8 staging models written (stg_retail__*.sql) — `dbt parse` clean (3 expected warnings for empty dirs)
+- `profiles.yml` created with placeholder Snowflake creds (gitignored) — needed for `dbt parse`
 
-Deferred to post-Phase 2 (not blocking):
-- Stream mode pending-transitions queue (ADR-019)
-- Levers 2 and 3 (time-of-day, product lifecycle)
-- Open PRs for all Phase 1 work (currently all on `main`)
+**Remaining Phase 2a deliverables:**
+1. Export DuckDB data to flat files (CSV + Parquet) — next up
+2. Write `snowflake_setup/setup.sql` (warehouses, databases, schemas, roles, grants, file formats, stages)
+3. Write `COPY INTO` load scripts for all three file formats
+
+**Phase 2b** (Snowflake trial clock starts):
+- Create Snowflake trial account
+- Run setup.sql, load all flat files, run `dbt run --select staging.*`
+
+**Background — Phase 1 complete:**
+Simulator functional, 69/69 tests passing. 200K orders / 340K customers / 200K addresses / 25K products.
+dbt Semantic Layer (MetricFlow + Snowflake Semantic Views) added as Phase 3d — see ADR-021.
 
 ---
 
