@@ -1,0 +1,309 @@
+version: 2
+
+models:
+  - name: stg_retail__addresses
+    description: >
+      One row per unique address. Addresses are standalone entities shared
+      across household members — multiple customers may reference the same
+      address_id.
+    columns:
+      - name: address_id
+        description: "Primary key. Format: addr_xxx."
+        tests:
+          - unique
+          - not_null
+      - name: street_address
+        description: Street number and name.
+        tests:
+          - not_null
+      - name: city
+        description: City name.
+        tests:
+          - not_null
+      - name: state
+        description: US state name.
+        tests:
+          - not_null
+      - name: postal_code
+        description: US ZIP code.
+        tests:
+          - not_null
+      - name: country
+        description: Country code. Defaults to US.
+        tests:
+          - not_null
+
+  - name: stg_retail__customers
+    description: >
+      One row per customer. Customers belong to a household via address_id —
+      multiple customers sharing the same address represent a household.
+      created_at extends 2 years into the future to support organic pool growth
+      in the simulator.
+    columns:
+      - name: customer_id
+        description: "Primary key. Format: cust_xxx."
+        tests:
+          - unique
+          - not_null
+      - name: first_name
+        description: Customer first name.
+        tests:
+          - not_null
+      - name: last_name
+        description: Customer last name.
+        tests:
+          - not_null
+      - name: email
+        description: Customer email address. Unique across all customers.
+        tests:
+          - unique
+          - not_null
+      - name: address_id
+        description: FK to stg_retail__addresses. Identifies household membership.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_retail__addresses')
+              field: address_id
+      - name: created_at
+        description: Timestamp when the customer record was created (timezone-aware).
+        tests:
+          - not_null
+
+  - name: stg_retail__products
+    description: >
+      One row per product. All products are assumed always available —
+      inventory quantity is not tracked (ADR-017).
+    columns:
+      - name: product_id
+        description: "Primary key. Format: prod_xxx."
+        tests:
+          - unique
+          - not_null
+      - name: sku
+        description: Stock keeping unit code.
+        tests:
+          - unique
+          - not_null
+      - name: product_name
+        description: Display name of the product. Renamed from name in source.
+        tests:
+          - not_null
+      - name: product_category
+        description: Product category. Renamed from category in source.
+        tests:
+          - not_null
+      - name: unit_price
+        description: Retail selling price. Renamed from price in source.
+        tests:
+          - not_null
+      - name: cost_price
+        description: Wholesale cost price used for margin calculations.
+        tests:
+          - not_null
+
+  - name: stg_retail__orders
+    description: >
+      One row per order. Captures the full order state machine snapshot —
+      state transitions are recorded separately in stg_retail__order_events.
+      shipping_address_id is snapshotted at order time and does not change
+      if the customer moves.
+    columns:
+      - name: order_id
+        description: "Primary key. Format: ord_xxx."
+        tests:
+          - unique
+          - not_null
+      - name: customer_id
+        description: FK to stg_retail__customers.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_retail__customers')
+              field: customer_id
+      - name: order_state
+        description: >
+          Current state in the order lifecycle.
+          Values: placed, confirmed, shipped, delivered, returned, cancelled.
+        tests:
+          - not_null
+          - accepted_values:
+              values: [placed, confirmed, shipped, delivered, returned, cancelled]
+      - name: order_date
+        description: Timestamp when the order was placed (timezone-aware).
+        tests:
+          - not_null
+      - name: updated_at
+        description: Timestamp of the most recent state transition.
+        tests:
+          - not_null
+      - name: subtotal
+        description: Order subtotal before tax and shipping.
+      - name: tax
+        description: Tax amount applied to the order.
+      - name: shipping_cost
+        description: Shipping charge applied to the order.
+      - name: total_amount
+        description: Final order total including subtotal, tax, and shipping.
+        tests:
+          - not_null
+      - name: shipping_address_id
+        description: FK to stg_retail__addresses. Snapshotted at order creation time.
+        tests:
+          - not_null
+      - name: is_stuck
+        description: True if the order is stuck in a state longer than expected.
+        tests:
+          - not_null
+      - name: stuck_reason
+        description: Human-readable reason the order is stuck. Null if is_stuck is false.
+
+  - name: stg_retail__order_items
+    description: >
+      One row per line item within an order. Each order has one or more items.
+    columns:
+      - name: order_item_id
+        description: "Primary key. Format: item_xxx."
+        tests:
+          - unique
+          - not_null
+      - name: order_id
+        description: FK to stg_retail__orders.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_retail__orders')
+              field: order_id
+      - name: product_id
+        description: FK to stg_retail__products.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_retail__products')
+              field: product_id
+      - name: quantity
+        description: Number of units ordered.
+        tests:
+          - not_null
+      - name: unit_price
+        description: Price per unit at the time of the order.
+        tests:
+          - not_null
+      - name: line_total
+        description: Total price for this line item (quantity × unit_price). Renamed from total_price in source.
+        tests:
+          - not_null
+
+  - name: stg_retail__payments
+    description: >
+      One row per payment. Each order has exactly one payment record.
+      Payment lifecycle timestamps are nullable — they are populated only
+      when the payment reaches that state.
+    columns:
+      - name: payment_id
+        description: "Primary key. Format: pay_xxx."
+        tests:
+          - unique
+          - not_null
+      - name: order_id
+        description: FK to stg_retail__orders. One payment per order.
+        tests:
+          - unique
+          - not_null
+          - relationships:
+              to: ref('stg_retail__orders')
+              field: order_id
+      - name: payment_state
+        description: >
+          Current state in the payment lifecycle.
+          Values: pending, authorized, captured, failed, refunded.
+        tests:
+          - not_null
+          - accepted_values:
+              values: [pending, authorized, captured, failed, refunded]
+      - name: amount
+        description: Payment amount in USD.
+        tests:
+          - not_null
+      - name: payment_method
+        description: "Payment method used. Examples: credit_card, debit_card, paypal."
+        tests:
+          - not_null
+      - name: payment_date
+        description: Timestamp when the payment was initiated. Null if not yet initiated.
+      - name: authorization_date
+        description: Timestamp when the payment was authorized. Null if not yet authorized.
+      - name: capture_date
+        description: Timestamp when funds were captured. Null if not yet captured.
+      - name: refund_date
+        description: Timestamp when the payment was refunded. Null if not refunded.
+      - name: failure_reason
+        description: Reason for payment failure. Null if payment did not fail.
+      - name: retry_count
+        description: Number of payment retry attempts.
+        tests:
+          - not_null
+
+  - name: stg_retail__order_events
+    description: >
+      One row per order state transition. Each record captures a single step
+      in the order lifecycle state machine — from previous_state to new_state.
+    columns:
+      - name: event_id
+        description: "Primary key. Format: evt_xxx."
+        tests:
+          - unique
+          - not_null
+      - name: order_id
+        description: FK to stg_retail__orders.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_retail__orders')
+              field: order_id
+      - name: previous_state
+        description: State before the transition. Null for the initial placed event.
+      - name: new_state
+        description: State after the transition.
+        tests:
+          - not_null
+      - name: event_timestamp
+        description: Timestamp when the transition occurred (timezone-aware).
+        tests:
+          - not_null
+      - name: reason
+        description: Optional human-readable reason for the transition (e.g. stuck reason).
+      - name: retry_count
+        description: Retry attempt number at the time of this event. Null if not a retry.
+
+  - name: stg_retail__payment_events
+    description: >
+      One row per payment state transition. Each record captures a single step
+      in the payment lifecycle state machine — from previous_state to new_state.
+    columns:
+      - name: event_id
+        description: "Primary key. Format: evt_xxx."
+        tests:
+          - unique
+          - not_null
+      - name: payment_id
+        description: FK to stg_retail__payments.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_retail__payments')
+              field: payment_id
+      - name: previous_state
+        description: State before the transition. Null for the initial pending event.
+      - name: new_state
+        description: State after the transition.
+        tests:
+          - not_null
+      - name: event_timestamp
+        description: Timestamp when the transition occurred (timezone-aware).
+        tests:
+          - not_null
+      - name: failure_reason
+        description: Reason for failure if the transition was to a failed state. Null otherwise.
+      - name: retry_attempt
+        description: Retry attempt number at the time of this event. Null if not a retry.

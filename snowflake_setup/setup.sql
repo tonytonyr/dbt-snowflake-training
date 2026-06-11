@@ -27,9 +27,9 @@ GRANT ROLE TRANSFORMER TO ROLE SYSADMIN;
 GRANT ROLE REPORTER    TO ROLE SYSADMIN;
 
 -- Grant roles to the trial account user (replace YOUR_USERNAME if needed).
-GRANT ROLE LOADER      TO USER CURRENT_USER();
-GRANT ROLE TRANSFORMER TO USER CURRENT_USER();
-GRANT ROLE REPORTER    TO USER CURRENT_USER();
+GRANT ROLE LOADER      TO USER tonyjrossignol;
+GRANT ROLE TRANSFORMER TO USER tonyjrossignol;
+GRANT ROLE REPORTER    TO USER tonyjrossignol;
 
 
 -- =============================================================================

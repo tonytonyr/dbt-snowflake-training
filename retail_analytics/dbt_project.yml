@@ -17,6 +17,9 @@ clean-targets:
 
 models:
   retail_analytics:
+    +persist_docs:
+      relation: true
+      columns: true
     staging:
       +schema: staging
       +materialized: view
