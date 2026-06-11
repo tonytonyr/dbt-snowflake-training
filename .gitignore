@@ -51,6 +51,9 @@ samples/*.sql
 *.duckdb
 *.duckdb.bak
 
+# Snowflake export files (generated from simulator, loaded via SnowSQL — not version-controlled)
+exports/
+
 # Node (OpenCode deps)
 node_modules/
 
