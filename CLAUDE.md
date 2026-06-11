@@ -132,30 +132,32 @@ All Phase 1 work is on `main` — no PRs opened yet. Before or alongside Phase 2
 
 ## Current Phase
 
-**Phase 2a — Local Prep (in progress)**
+**Phase 2b — Snowflake Account Setup + Initial Load (next)**
 
-Branch: `feature/phase-2a-local-prep`
+Phase 2a is complete and merged into `feature/phase-2a-local-prep`.
 
-**Completed this session:**
-- VS Code Dev Container created (`.devcontainer/Dockerfile` + `devcontainer.json`)
-  — dbt-core 1.8.9, dbt-snowflake 1.8.4, dbt-metricflow 0.7.0, sqlfluff 3.3.0
-  — Note: pinned to 1.8.x because dbt-metricflow 0.7.0 requires dbt-core<1.9.0
-- dbt project scaffolded manually (dbt init unreliable in container — used mkdir + manual files)
-- `dbt_project.yml` configured: staging=view, intermediate=ephemeral, marts=table
-- `packages.yml`: dbt_utils 1.3.3 installed via `dbt deps`
-- `macros/generate_schema_name.sql`: prevents Snowflake schema name prefixing
-- `models/staging/sources.yml`: all 8 RAW.retail source tables declared
-- 8 staging models written (stg_retail__*.sql) — `dbt parse` clean (3 expected warnings for empty dirs)
-- `profiles.yml` created with placeholder Snowflake creds (gitignored) — needed for `dbt parse`
+**Phase 2a delivered:**
+- VS Code Dev Container (dbt 1.8.9, dbt-snowflake, MetricFlow 0.7.0, SQLFluff)
+- dbt project scaffolded: staging=view, intermediate=ephemeral, marts=table
+- `generate_schema_name` macro, `sources.yml`, 8 staging models (schema-corrected — PR #11)
+- DuckDB exports: CSV (addresses, customers, products), flat Parquet (orders, order_items, payments),
+  Hive-partitioned Parquet by year/month (order_events, payment_events)
+- `snowflake_setup/setup.sql`: roles, warehouses, databases/schemas, grants, DDL, file formats, stages
+- `snowflake_setup/load.sql`: COPY INTO for all 3 format patterns + verification query
 
-**Remaining Phase 2a deliverables:**
-1. Export DuckDB data to flat files (CSV + Parquet) — next up
-2. Write `snowflake_setup/setup.sql` (warehouses, databases, schemas, roles, grants, file formats, stages)
-3. Write `COPY INTO` load scripts for all three file formats
+**Key schema facts (verified from exports — critical for Phase 2b):**
+- All IDs are strings: `ord_xxx`, `cust_xxx`, `addr_xxx`, `prod_xxx`, `pay_xxx`, `evt_xxx`, `item_xxx`
+- `orders.order_state` (not `status`); also has `subtotal`, `tax`, `shipping_cost`, `is_stuck`, `stuck_reason`
+- `payments` has 4 lifecycle timestamps: `payment_date`, `authorization_date`, `capture_date`, `refund_date`
+- `order_events` / `payment_events` have no `event_type` column (column was in spec but not emitted by simulator)
+- `products` has `sku` + `cost_price` (not `margin`)
 
-**Phase 2b** (Snowflake trial clock starts):
-- Create Snowflake trial account
-- Run setup.sql, load all flat files, run `dbt run --select staging.*`
+**Phase 2b steps (start next session):**
+1. Create Snowflake trial account
+2. Run `snowflake_setup/setup.sql` as ACCOUNTADMIN
+3. PUT export files to internal stages via SnowSQL CLI
+4. Run `snowflake_setup/load.sql` — COPY INTO all 8 tables
+5. Run `dbt run --select staging.*` inside dev container — target: all 8 models green
 
 **Background — Phase 1 complete:**
 Simulator functional, 69/69 tests passing. 200K orders / 340K customers / 200K addresses / 25K products.
