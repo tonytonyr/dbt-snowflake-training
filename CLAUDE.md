@@ -132,32 +132,36 @@ All Phase 1 work is on `main` — no PRs opened yet. Before or alongside Phase 2
 
 ## Current Phase
 
-**Phase 2b — Snowflake Account Setup + Initial Load (next)**
+**Phase 3 — Intermediate Models, Marts, and Snowflake Tasks (next)**
 
-Phase 2a is complete and merged into `feature/phase-2a-local-prep`.
+Phase 2b is complete and merged (PR #13).
 
-**Phase 2a delivered:**
-- VS Code Dev Container (dbt 1.8.9, dbt-snowflake, MetricFlow 0.7.0, SQLFluff)
-- dbt project scaffolded: staging=view, intermediate=ephemeral, marts=table
-- `generate_schema_name` macro, `sources.yml`, 8 staging models (schema-corrected — PR #11)
-- DuckDB exports: CSV (addresses, customers, products), flat Parquet (orders, order_items, payments),
-  Hive-partitioned Parquet by year/month (order_events, payment_events)
-- `snowflake_setup/setup.sql`: roles, warehouses, databases/schemas, grants, DDL, file formats, stages
-- `snowflake_setup/load.sql`: COPY INTO for all 3 format patterns + verification query
+**Phase 2b delivered:**
+- Snowflake trial account: `NHUKSVM-HV76137.snowflakecomputing.com`, user `tonyjrossignol`
+- SnowSQL configured via `~/.snowsql/config` — `snowsql` connects without flags
+- All 8 tables loaded into `RAW.RETAIL` — verified row counts:
+  - addresses: 200,000 | customers: 340,452 | products: 25,000
+  - orders: 200,000 | order_items: 600,484 | payments: 200,000
+  - order_events: 587,593 | payment_events: 406,905
+- `dbt run --select staging.*` — 8 views green in `ANALYTICS.STAGING`
+- `schema.yml` added: descriptions + 66 data tests, all passing
+- `persist_docs` enabled — column descriptions visible in Snowflake Horizon Catalog
+- Discovered `cancelled` as a valid `order_state` (added to accepted_values test)
 
-**Key schema facts (verified from exports — critical for Phase 2b):**
+**Key environment facts (critical for Phase 3):**
+- Dev container path: `/workspace/retail_analytics`
+- `profiles.yml` lives inside the repo at `retail_analytics/profiles.yml`
+- `generate_schema_name` macro: models land in schema as named (no target prefix) — staging → `ANALYTICS.STAGING`
+- Snowflake UI uses "Workspaces" layout — SQL files via **Workspaces → + → SQL File**
+
+**Key schema facts (verified against live Snowflake data):**
 - All IDs are strings: `ord_xxx`, `cust_xxx`, `addr_xxx`, `prod_xxx`, `pay_xxx`, `evt_xxx`, `item_xxx`
-- `orders.order_state` (not `status`); also has `subtotal`, `tax`, `shipping_cost`, `is_stuck`, `stuck_reason`
+- `orders.order_state` values: placed, confirmed, shipped, delivered, returned, cancelled
+- `payments.payment_state` values: pending, authorized, captured, failed, refunded
 - `payments` has 4 lifecycle timestamps: `payment_date`, `authorization_date`, `capture_date`, `refund_date`
-- `order_events` / `payment_events` have no `event_type` column (column was in spec but not emitted by simulator)
-- `products` has `sku` + `cost_price` (not `margin`)
-
-**Phase 2b steps (start next session):**
-1. Create Snowflake trial account
-2. Run `snowflake_setup/setup.sql` as ACCOUNTADMIN
-3. PUT export files to internal stages via SnowSQL CLI
-4. Run `snowflake_setup/load.sql` — COPY INTO all 8 tables
-5. Run `dbt run --select staging.*` inside dev container — target: all 8 models green
+- `order_events` / `payment_events` have no `event_type` column
+- `products` staging renames: `name→product_name`, `category→product_category`, `price→unit_price`
+- `order_items` staging renames: `total_price→line_total`
 
 **Background — Phase 1 complete:**
 Simulator functional, 69/69 tests passing. 200K orders / 340K customers / 200K addresses / 25K products.
