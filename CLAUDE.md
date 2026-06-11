@@ -132,23 +132,36 @@ All Phase 1 work is on `main` — no PRs opened yet. Before or alongside Phase 2
 
 ## Current Phase
 
-**Phase 1 → Phase 2 handoff**
+**Phase 2b — Snowflake Account Setup + Initial Load (next)**
 
-Phase 1 status: **Complete.** Simulator functional and tested (69/69 passing).
-Bootstrap data regenerated with seasonal acquisition curve. Clean 24-month
-historical run completed: 200K orders across 200K addresses / 340K customers /
-25K products. Generator tail-spike bug fixed. DuckDB bulk write 550× faster via
-pandas zero-copy path. Data quality notebook: 24/24 checks passing, YoY weekly
-chart added.
+Phase 2a is complete and merged into `feature/phase-2a-local-prep`.
 
-**Phase plan updated 2026-06-10:** dbt Semantic Layer (MetricFlow + Snowflake
-Semantic Views) added as Phase 3d — see ADR-021 and Phase 3d section in SPEC.md.
-Phase 3d is gated on Phase 3b (mart models) and runs before Phase 4 (CDC).
+**Phase 2a delivered:**
+- VS Code Dev Container (dbt 1.8.9, dbt-snowflake, MetricFlow 0.7.0, SQLFluff)
+- dbt project scaffolded: staging=view, intermediate=ephemeral, marts=table
+- `generate_schema_name` macro, `sources.yml`, 8 staging models (schema-corrected — PR #11)
+- DuckDB exports: CSV (addresses, customers, products), flat Parquet (orders, order_items, payments),
+  Hive-partitioned Parquet by year/month (order_events, payment_events)
+- `snowflake_setup/setup.sql`: roles, warehouses, databases/schemas, grants, DDL, file formats, stages
+- `snowflake_setup/load.sql`: COPY INTO for all 3 format patterns + verification query
 
-Deferred to post-Phase 2 (not blocking):
-- Stream mode pending-transitions queue (ADR-019)
-- Levers 2 and 3 (time-of-day, product lifecycle)
-- Open PRs for all Phase 1 work (currently all on `main`)
+**Key schema facts (verified from exports — critical for Phase 2b):**
+- All IDs are strings: `ord_xxx`, `cust_xxx`, `addr_xxx`, `prod_xxx`, `pay_xxx`, `evt_xxx`, `item_xxx`
+- `orders.order_state` (not `status`); also has `subtotal`, `tax`, `shipping_cost`, `is_stuck`, `stuck_reason`
+- `payments` has 4 lifecycle timestamps: `payment_date`, `authorization_date`, `capture_date`, `refund_date`
+- `order_events` / `payment_events` have no `event_type` column (column was in spec but not emitted by simulator)
+- `products` has `sku` + `cost_price` (not `margin`)
+
+**Phase 2b steps (start next session):**
+1. Create Snowflake trial account
+2. Run `snowflake_setup/setup.sql` as ACCOUNTADMIN
+3. PUT export files to internal stages via SnowSQL CLI
+4. Run `snowflake_setup/load.sql` — COPY INTO all 8 tables
+5. Run `dbt run --select staging.*` inside dev container — target: all 8 models green
+
+**Background — Phase 1 complete:**
+Simulator functional, 69/69 tests passing. 200K orders / 340K customers / 200K addresses / 25K products.
+dbt Semantic Layer (MetricFlow + Snowflake Semantic Views) added as Phase 3d — see ADR-021.
 
 ---
 
