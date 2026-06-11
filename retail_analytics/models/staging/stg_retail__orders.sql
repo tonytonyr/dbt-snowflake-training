@@ -6,10 +6,16 @@ renamed as (
     select
         order_id,
         customer_id,
+        order_state,
         order_date,
-        status                                      as order_status,
+        updated_at,
+        subtotal,
+        tax,
+        shipping_cost,
         total_amount,
-        updated_at
+        shipping_address_id,
+        is_stuck,
+        stuck_reason
     from source
 )
 
