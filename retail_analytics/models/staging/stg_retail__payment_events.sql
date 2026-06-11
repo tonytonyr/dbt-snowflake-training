@@ -7,11 +7,11 @@ renamed as (
         event_id,
         payment_id,
         event_type,
-        from_state,
-        to_state,
+        previous_state,
+        new_state,
         failure_reason,
         retry_attempt,
-        created_at
+        event_timestamp
     from source
 )
 

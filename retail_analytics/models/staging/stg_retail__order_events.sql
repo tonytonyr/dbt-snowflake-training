@@ -7,11 +7,11 @@ renamed as (
         event_id,
         order_id,
         event_type,
-        from_state,
-        to_state,
+        previous_state,
+        new_state,
         reason,
         retry_count,
-        created_at
+        event_timestamp
     from source
 )
 
