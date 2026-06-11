@@ -6,12 +6,11 @@ renamed as (
     select
         event_id,
         order_id,
-        event_type,
         previous_state,
         new_state,
+        event_timestamp,
         reason,
-        retry_count,
-        event_timestamp
+        retry_count
     from source
 )
 

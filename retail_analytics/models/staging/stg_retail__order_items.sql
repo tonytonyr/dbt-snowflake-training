@@ -9,7 +9,7 @@ renamed as (
         product_id,
         quantity,
         unit_price,
-        quantity * unit_price   as line_total
+        total_price             as line_total
     from source
 )
 

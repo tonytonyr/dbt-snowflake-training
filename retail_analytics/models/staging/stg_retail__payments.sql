@@ -6,9 +6,15 @@ renamed as (
     select
         payment_id,
         order_id,
-        payment_method,
         payment_state,
-        amount
+        amount,
+        payment_method,
+        payment_date,
+        authorization_date,
+        capture_date,
+        refund_date,
+        failure_reason,
+        retry_count
     from source
 )
 

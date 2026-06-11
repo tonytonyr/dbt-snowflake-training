@@ -6,12 +6,11 @@ renamed as (
     select
         event_id,
         payment_id,
-        event_type,
         previous_state,
         new_state,
+        event_timestamp,
         failure_reason,
-        retry_attempt,
-        event_timestamp
+        retry_attempt
     from source
 )
 
