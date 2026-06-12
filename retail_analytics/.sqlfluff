@@ -1,12 +1,14 @@
 [sqlfluff]
 templater = dbt
 dialect = snowflake
-# Exclude rules that conflict with our column-alignment style convention:
+# Exclude rules that conflict with our style or produce Jinja false positives:
 #   LT01 - we deliberately pad 'as' to align column aliases
+#   LT02 - dbt templater mis-counts indentation inside {% if is_incremental() %} blocks
 #   LT09 - single-target selects are allowed on the same line as SELECT
+#   RF02 - false positive: subqueries referencing {{ this }} appear unqualified to SQLFluff
 #   ST06 - we order columns for readability, not by SQLFluff's wildcard-first rule
 #   ST07 - USING is acceptable; we don't mandate ON everywhere
-exclude_rules = LT01, LT09, ST06, ST07
+exclude_rules = LT01, LT02, LT09, RF02, ST06, ST07
 
 [sqlfluff:indentation]
 indent_unit = space
