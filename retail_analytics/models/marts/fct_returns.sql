@@ -1,6 +1,19 @@
+{{
+  config(
+    materialized     = 'incremental',
+    unique_key       = 'order_id',
+    on_schema_change = 'sync_all_columns'
+  )
+}}
+
 with orders as (
     select * from {{ ref('fct_orders') }}
     where is_returned = true
+    {% if is_incremental() %}
+    -- Newly-returned orders will have updated_at freshly bumped by fct_orders' MERGE.
+    -- Anchor on max(returned_at) from this table so we don't reprocess old returns.
+    and updated_at >= dateadd('day', -3, (select max(returned_at) from {{ this }}))
+    {% endif %}
 ),
 
 order_events as (

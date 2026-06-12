@@ -150,6 +150,13 @@ models:
       Conformed order fact table. One row per order, joining enriched order data,
       payment details, and shipment timeliness. The primary analytical fact table
       for revenue, fulfilment, and customer-behaviour reporting.
+    data_tests:
+      - dbt_utils.recency:
+          datepart: hour
+          field: updated_at
+          interval: 24
+          config:
+            severity: warn
     columns:
       - name: order_id
         description: Primary key — unique identifier for the order.
