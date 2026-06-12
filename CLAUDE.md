@@ -132,7 +132,39 @@ All Phase 1 work is on `main` — no PRs opened yet. Before or alongside Phase 2
 
 ## Current Phase
 
-**Phase 3 — Intermediate Models, Marts, and Snowflake Tasks (next)**
+**Phase 3c — Tests, Docs, and CI/CD (next)**
+
+Phase 3b is complete and merged (PR #16).
+
+**Phase 3b delivered:**
+- `snapshots/customers_scd.sql` — SCD Type 2, check strategy on name/email/address_id
+- `snapshots/products_scd.sql` — SCD Type 2, check strategy on name/category/price
+- `models/marts/dim_date.sql` — calendar spine 2022-01-01 → 2028-12-31 via Snowflake GENERATOR
+- `models/marts/dim_customers.sql` — current SCD2 row + address join + lifetime order metrics + cohort_month + customer_segment
+- `models/marts/dim_products.sql` — current SCD2 row + gross_margin_pct + price_band
+- `models/marts/fct_orders.sql` — conformed fact joining all 3 intermediate models
+- `models/marts/fct_returns.sql` — returned orders with returned_at + days_to_return
+- `models/marts/fct_payments.sql` — payment lifecycle with hours_to_authorize / hours_to_capture
+- `models/marts/schema.yml` — full column descriptions + 32 data tests, all passing
+- `models/marts/exposures.yml` — revenue_dashboard + payment_health_report exposures
+- `dbt build --select marts.*` — 38/38 PASS (6 models + 32 tests)
+
+**Gotcha fixed this session:**
+- `dbt_project.yml` had global `+strategy: timestamp` / `+updated_at: updated_at` for snapshots.
+  dbt project-level config overrides block-level config, so the `check` strategy inside each
+  snapshot file was silently ignored. Fix: removed both keys from `dbt_project.yml`; each
+  snapshot now controls its own strategy. Keep this in mind — never set a global snapshot
+  strategy unless all snapshots share the same source column.
+
+**Phase 3c scope (next session):**
+Branch: `feature/phase-3c-tests-docs-cicd`
+1. Source freshness — warn/error thresholds on `orders` and `payment_events` sources
+2. Custom singular test — `tests/assert_order_totals_balance.sql` (order total vs sum of line items)
+3. Macros — at least one utility macro beyond `generate_schema_name`
+4. `dbt docs generate` — confirm docs site renders with lineage graph and exposure nodes
+5. GitHub Actions CI — `ci.yml` (PR: SQLFluff + `dbt build --select state:modified+`) and
+   `cd.yml` (merge to main: full `dbt build` + `dbt docs generate` + manifest upload)
+6. Snowflake credentials stored as GitHub Actions secrets — never in code
 
 Phase 2b is complete and merged (PR #13).
 
