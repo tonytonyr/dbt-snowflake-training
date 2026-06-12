@@ -1,0 +1,114 @@
+version: 2
+
+models:
+  - name: int_orders_enriched
+    description: >
+      Orders joined with line items and products. Adds item counts and revenue/margin
+      aggregates at the order level. One row per order.
+    columns:
+      - name: order_id
+        description: Primary key — unique order identifier.
+        tests:
+          - not_null
+          - unique
+      - name: customer_id
+        description: Foreign key to stg_retail__customers.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_retail__customers')
+              field: customer_id
+      - name: order_state
+        description: Current order lifecycle state.
+        tests:
+          - not_null
+          - accepted_values:
+              values: [placed, confirmed, shipped, delivered, returned, cancelled]
+      - name: line_count
+        description: Number of distinct line items on the order.
+        tests:
+          - not_null
+      - name: item_count
+        description: Total quantity of units ordered across all line items.
+        tests:
+          - not_null
+      - name: gross_revenue
+        description: Sum of line_total across all items (pre-tax, pre-shipping).
+        tests:
+          - not_null
+      - name: gross_margin
+        description: Sum of (unit_price - cost_price) * quantity across all items.
+        tests:
+          - not_null
+
+  - name: int_orders_with_payments
+    description: >
+      Each order joined to its payment record. Adds payment lifecycle attributes
+      and flags payment amount discrepancies. One row per order.
+    columns:
+      - name: order_id
+        description: Primary key — unique order identifier.
+        tests:
+          - not_null
+          - unique
+      - name: customer_id
+        description: Foreign key to stg_retail__customers.
+        tests:
+          - not_null
+      - name: payment_id
+        description: Foreign key to stg_retail__payments. Null if no payment record exists.
+      - name: payment_state
+        description: Current payment lifecycle state.
+        tests:
+          - accepted_values:
+              values: [pending, authorized, captured, failed, refunded]
+      - name: has_discrepancy
+        description: True when the payment amount differs from the order total by more than $0.01.
+      - name: is_refunded
+        description: True when payment_state is 'refunded'.
+
+  - name: int_customer_orders
+    description: >
+      Customer-level order aggregates. One row per customer who has placed at least
+      one order. Used to build behavioral attributes on dim_customers.
+    columns:
+      - name: customer_id
+        description: Primary key — unique customer identifier.
+        tests:
+          - not_null
+          - unique
+          - relationships:
+              to: ref('stg_retail__customers')
+              field: customer_id
+      - name: order_count
+        description: Total number of orders placed by this customer.
+        tests:
+          - not_null
+      - name: total_spend
+        description: Lifetime sum of order total_amount for this customer.
+        tests:
+          - not_null
+      - name: return_rate
+        description: Fraction of orders that were returned. Null if order_count is 0.
+      - name: is_active
+        description: True if the customer placed an order within the last 365 days.
+
+  - name: int_shipment_timeliness
+    description: >
+      Per-order delivery timing derived from order_events transition timestamps.
+      Shipped and delivered timestamps are extracted by pivoting on new_state.
+      One row per order.
+    columns:
+      - name: order_id
+        description: Primary key — unique order identifier.
+        tests:
+          - not_null
+          - unique
+          - relationships:
+              to: ref('stg_retail__orders')
+              field: order_id
+      - name: sla_days
+        description: Delivery SLA target in days (hardcoded at 7 for this project).
+      - name: is_on_time
+        description: >
+          True if delivered within sla_days of order_date. Null for orders not yet delivered.
