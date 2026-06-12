@@ -1,5 +1,17 @@
+{{
+  config(
+    materialized     = 'incremental',
+    unique_key       = 'order_id',
+    on_schema_change = 'sync_all_columns'
+  )
+}}
+
 with enriched as (
     select * from {{ ref('int_orders_enriched') }}
+    {% if is_incremental() %}
+    -- Lookback 3 days to catch in-flight orders whose state changed since last run
+    where updated_at >= dateadd('day', -3, (select max(updated_at) from {{ this }}))
+    {% endif %}
 ),
 
 with_payments as (

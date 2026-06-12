@@ -1,5 +1,24 @@
+{{
+  config(
+    materialized     = 'incremental',
+    unique_key       = 'payment_id',
+    on_schema_change = 'sync_all_columns'
+  )
+}}
+
 with payments as (
     select * from {{ ref('stg_retail__payments') }}
+    {% if is_incremental() %}
+    -- Use GREATEST across all lifecycle timestamps so late-arriving captures/refunds
+    -- are caught. COALESCE nulls to a sentinel because Snowflake GREATEST returns NULL
+    -- if any argument is NULL.
+    where greatest(
+        payment_date,
+        coalesce(authorization_date, '1900-01-01'::timestamp),
+        coalesce(capture_date,       '1900-01-01'::timestamp),
+        coalesce(refund_date,        '1900-01-01'::timestamp)
+    ) >= dateadd('day', -3, (select max(payment_date) from {{ this }}))
+    {% endif %}
 ),
 
 orders as (
