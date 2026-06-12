@@ -1,0 +1,34 @@
+version: 2
+
+exposures:
+  - name: revenue_dashboard
+    label: Revenue & Fulfilment Dashboard
+    type: dashboard
+    maturity: medium
+    description: >
+      Executive dashboard tracking weekly revenue, AOV, return rate, and on-time
+      delivery. Pulls directly from fct_orders and dim_date.
+    depends_on:
+      - ref('fct_orders')
+      - ref('dim_customers')
+      - ref('dim_products')
+      - ref('dim_date')
+    owner:
+      name: Tony Rossignol
+      email: tonyjrossignol@gmail.com
+
+  - name: payment_health_report
+    label: Payment Health Report
+    type: analysis
+    maturity: low
+    description: >
+      Operational report for payment ops: authorization rates, capture latency,
+      failure reasons, and refund volumes. Built on fct_payments joined to
+      dim_customers for segmentation.
+    depends_on:
+      - ref('fct_payments')
+      - ref('dim_customers')
+      - ref('dim_date')
+    owner:
+      name: Tony Rossignol
+      email: tonyjrossignol@gmail.com

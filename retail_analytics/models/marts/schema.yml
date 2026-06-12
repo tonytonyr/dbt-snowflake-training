@@ -1,0 +1,331 @@
+version: 2
+
+models:
+  - name: dim_date
+    description: >
+      Calendar dimension covering 2022-01-01 through 2028-12-31. Generated from a
+      Snowflake row generator — no source table dependency.
+    columns:
+      - name: date_day
+        description: The calendar date (grain of this dimension).
+        data_tests:
+          - unique
+          - not_null
+      - name: day_of_week_num
+        description: Day of week number (0=Sunday, 6=Saturday in Snowflake).
+      - name: day_name
+        description: Abbreviated day name (Mon, Tue, …).
+      - name: day_of_month
+        description: Day number within the month (1–31).
+      - name: day_of_year
+        description: Day number within the year (1–366).
+      - name: week_of_year
+        description: ISO week number (1–53).
+      - name: month_num
+        description: Month number (1–12).
+      - name: month_name
+        description: Abbreviated month name (Jan, Feb, …).
+      - name: quarter_num
+        description: Quarter number (1–4).
+      - name: year_num
+        description: Four-digit year.
+      - name: week_start_date
+        description: Date of the Monday starting this week.
+      - name: month_start_date
+        description: First day of the month.
+      - name: quarter_start_date
+        description: First day of the quarter.
+      - name: year_month
+        description: Year-month string in YYYY-MM format, useful for grouping.
+      - name: is_weekend
+        description: True if date falls on Saturday or Sunday.
+
+  - name: dim_customers
+    description: >
+      Current-state customer dimension. One row per active customer, sourced from the
+      customers_scd Type 2 snapshot (dbt_valid_to IS NULL). Joined to addresses for
+      geographic attributes and to int_customer_orders for lifetime metrics.
+    columns:
+      - name: customer_id
+        description: Surrogate identifier for the customer (primary key).
+        data_tests:
+          - unique
+          - not_null
+      - name: first_name
+        description: Customer's first name.
+      - name: last_name
+        description: Customer's last name.
+      - name: email
+        description: Customer's email address (unique in source).
+        data_tests:
+          - unique
+          - not_null
+      - name: address_id
+        description: Foreign key to the customer's registered address.
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_retail__addresses')
+              field: address_id
+      - name: city
+        description: City of the customer's registered address.
+      - name: state
+        description: US state abbreviation.
+      - name: postal_code
+        description: ZIP code of the customer's registered address.
+      - name: country
+        description: Country code (e.g., US).
+      - name: created_at
+        description: Timestamp when the customer account was created.
+      - name: cohort_month
+        description: Year-month (YYYY-MM) the customer signed up — used for cohort analysis.
+      - name: cohort_year
+        description: Year the customer signed up.
+      - name: lifetime_order_count
+        description: Total number of orders placed by this customer across all time.
+      - name: lifetime_spend
+        description: Total revenue attributed to this customer.
+      - name: first_order_date
+        description: Date of the customer's first order.
+      - name: last_order_date
+        description: Date of the customer's most recent order.
+      - name: return_rate
+        description: Fraction of orders that were returned (0.0–1.0).
+      - name: is_active
+        description: True if the customer placed at least one order in the past 365 days.
+      - name: customer_segment
+        description: >
+          Behavioural segment: never_ordered, one_time (1 order), repeat (2–4),
+          loyal (5+).
+        data_tests:
+          - accepted_values:
+              values: [never_ordered, one_time, repeat, loyal]
+      - name: dbt_valid_from
+        description: Timestamp when this SCD2 record became valid.
+      - name: dbt_scd_id
+        description: dbt-generated surrogate key for the SCD2 record.
+
+  - name: dim_products
+    description: >
+      Current-state product dimension. One row per active product, sourced from the
+      products_scd Type 2 snapshot (dbt_valid_to IS NULL). Adds margin and price-band
+      classifications.
+    columns:
+      - name: product_id
+        description: Surrogate identifier for the product (primary key).
+        data_tests:
+          - unique
+          - not_null
+      - name: sku
+        description: Stock-keeping unit — human-readable product code.
+        data_tests:
+          - unique
+          - not_null
+      - name: product_name
+        description: Display name of the product.
+      - name: product_category
+        description: High-level category grouping (e.g., Electronics, Clothing).
+      - name: unit_price
+        description: Current retail price per unit.
+      - name: cost_price
+        description: Cost of goods for one unit.
+      - name: gross_margin_amount
+        description: Margin per unit in dollars (unit_price - cost_price).
+      - name: gross_margin_pct
+        description: Margin percentage (0.0–1.0).
+      - name: price_band
+        description: >
+          Price tier: budget (<$25), mid_range ($25–$74), premium ($75–$199),
+          luxury ($200+).
+        data_tests:
+          - accepted_values:
+              values: [budget, mid_range, premium, luxury]
+      - name: dbt_valid_from
+        description: Timestamp when this SCD2 record became valid.
+      - name: dbt_scd_id
+        description: dbt-generated surrogate key for the SCD2 record.
+
+  - name: fct_orders
+    description: >
+      Conformed order fact table. One row per order, joining enriched order data,
+      payment details, and shipment timeliness. The primary analytical fact table
+      for revenue, fulfilment, and customer-behaviour reporting.
+    columns:
+      - name: order_id
+        description: Primary key — unique identifier for the order.
+        data_tests:
+          - unique
+          - not_null
+      - name: customer_id
+        description: Foreign key to dim_customers.
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_customers')
+              field: customer_id
+      - name: order_date_day
+        description: Order date truncated to date, foreign key to dim_date.
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_day
+      - name: order_date
+        description: Full timestamp when the order was placed.
+      - name: updated_at
+        description: Timestamp of the most recent order lifecycle event.
+      - name: order_state
+        description: Current state of the order.
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [placed, confirmed, shipped, delivered, returned, cancelled]
+      - name: shipping_address_id
+        description: Address the order was shipped to.
+      - name: line_count
+        description: Number of distinct line items in the order.
+      - name: item_count
+        description: Total units ordered across all line items.
+      - name: gross_revenue
+        description: Sum of line_total across all items (before tax/shipping).
+      - name: gross_margin
+        description: Sum of (unit_price - cost_price) * quantity across all items.
+      - name: subtotal
+        description: Order subtotal before tax and shipping.
+      - name: tax
+        description: Tax amount applied to the order.
+      - name: shipping_cost
+        description: Shipping fee charged to the customer.
+      - name: total_amount
+        description: Final order total (subtotal + tax + shipping_cost).
+      - name: payment_id
+        description: Foreign key to fct_payments.
+      - name: payment_method
+        description: Payment method used (e.g., credit_card, paypal).
+      - name: payment_state
+        description: Current state of the associated payment.
+      - name: payment_amount
+        description: Amount charged in the payment record.
+      - name: payment_date
+        description: When the payment was initiated.
+      - name: has_discrepancy
+        description: True if payment amount differs from order total by more than $0.01.
+      - name: is_refunded
+        description: True if the payment was refunded.
+      - name: shipped_at
+        description: Timestamp when the order transitioned to shipped state.
+      - name: delivered_at
+        description: Timestamp when the order transitioned to delivered state.
+      - name: days_to_ship
+        description: Calendar days from order_date to shipped_at.
+      - name: days_to_deliver
+        description: Calendar days from order_date to delivered_at.
+      - name: is_on_time
+        description: True if delivered within 7 days of order_date. Null if not yet delivered.
+      - name: is_stuck
+        description: True if the order is flagged as stuck in a lifecycle state.
+      - name: stuck_reason
+        description: Human-readable reason the order is stuck, if applicable.
+      - name: is_returned
+        description: True if order_state = returned.
+      - name: is_cancelled
+        description: True if order_state = cancelled.
+
+  - name: fct_returns
+    description: >
+      Returns fact table. One row per returned order. Captures the return timestamp
+      from order_events and derives days_to_return for SLA analysis. References
+      fct_orders for financial context.
+    columns:
+      - name: order_id
+        description: Primary key — unique identifier for the returned order.
+        data_tests:
+          - unique
+          - not_null
+      - name: customer_id
+        description: Foreign key to dim_customers.
+        data_tests:
+          - not_null
+      - name: order_date_day
+        description: Original order date (date only), for joining to dim_date.
+      - name: order_date
+        description: Full timestamp when the order was placed.
+      - name: order_amount
+        description: Total amount of the original order.
+      - name: order_margin
+        description: Gross margin of the returned order.
+      - name: payment_id
+        description: Foreign key to fct_payments.
+      - name: payment_method
+        description: Payment method used on the original order.
+      - name: refund_amount
+        description: Amount refunded (payment amount on a refunded payment record).
+      - name: payment_state
+        description: Final payment state (expected to be refunded for most returns).
+      - name: returned_at
+        description: Timestamp when the order transitioned to returned state.
+      - name: days_to_return
+        description: Calendar days from order_date to returned_at.
+
+  - name: fct_payments
+    description: >
+      Payments fact table. One row per payment, with lifecycle timestamps and
+      derived processing-time metrics. Useful for payment health monitoring
+      and fraud-pattern analysis.
+    columns:
+      - name: payment_id
+        description: Primary key — unique identifier for the payment.
+        data_tests:
+          - unique
+          - not_null
+      - name: order_id
+        description: Foreign key to fct_orders.
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('fct_orders')
+              field: order_id
+      - name: customer_id
+        description: Customer who placed the associated order.
+        data_tests:
+          - not_null
+      - name: order_date_day
+        description: Order date (date only), for joining to dim_date.
+      - name: order_date
+        description: Full timestamp when the associated order was placed.
+      - name: order_state
+        description: Current state of the associated order.
+      - name: payment_method
+        description: Payment method used (e.g., credit_card, paypal).
+      - name: payment_state
+        description: Current state of the payment.
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [pending, authorized, captured, failed, refunded]
+      - name: payment_amount
+        description: Amount charged in this payment.
+      - name: order_amount
+        description: Total amount of the associated order.
+      - name: has_discrepancy
+        description: True if payment_amount differs from order_amount by more than $0.01.
+      - name: payment_date
+        description: When the payment was initiated.
+      - name: authorization_date
+        description: When the payment was authorized.
+      - name: capture_date
+        description: When the payment was captured.
+      - name: refund_date
+        description: When the refund was issued, if applicable.
+      - name: failure_reason
+        description: Reason for payment failure, if applicable.
+      - name: retry_count
+        description: Number of payment retry attempts.
+      - name: hours_to_authorize
+        description: Hours elapsed from payment initiation to authorization.
+      - name: hours_to_capture
+        description: Hours elapsed from authorization to capture.
+      - name: is_refunded
+        description: True if payment_state = refunded.
+      - name: is_failed
+        description: True if payment_state = failed.
