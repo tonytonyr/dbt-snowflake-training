@@ -18,10 +18,14 @@ jobs:
       - name: Install SQLFluff
         run: pip install sqlfluff sqlfluff-templater-dbt dbt-snowflake
 
+      - name: Set up dbt profile
+        run: |
+          mkdir -p ~/.dbt
+          cp retail_analytics/profiles.yml ~/.dbt/profiles.yml
+
       - name: Lint SQL
         working-directory: retail_analytics
         env:
-          DBT_PROFILES_DIR: ${{ github.workspace }}/retail_analytics
           SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
         run: sqlfluff lint models/ --dialect snowflake --templater dbt
 
