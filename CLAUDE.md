@@ -132,7 +132,32 @@ All Phase 1 work is on `main` — no PRs opened yet. Before or alongside Phase 2
 
 ## Current Phase
 
-**Phase 3c — Tests, Docs, and CI/CD (next)**
+**Phase 3d — Semantic Layer (next)**
+
+Phase 3c is complete and merged (PR #18).
+
+**Phase 3c delivered:**
+- `models/staging/sources.yml` — source freshness on `orders` (updated_at) and `payment_events` (event_timestamp): warn 24h, error 48h
+- `tests/assert_order_totals_balance.sql` — singular test: order subtotal must match sum of line items within $0.01
+- `macros/classify_price_band.sql` — utility macro extracted from `dim_products` inline CASE; model updated to call it
+- `.sqlfluff` — linter config matching project style (excludes LT01/LT09/ST06/ST07)
+- `.github/workflows/ci.yml` — on PR: SQLFluff lint + `dbt build --select state:modified+` (downloads prod manifest artifact; falls back to full build on first run)
+- `.github/workflows/cd.yml` — on merge to main: full `dbt build` + `dbt docs generate` + uploads manifest (30-day) and docs (7-day) artifacts
+- `SNOWFLAKE_PASSWORD` stored as GitHub Actions secret — no credentials in code
+
+**CI/CD gotchas fixed this session:**
+- `profiles.yml` is gitignored — must be written at runtime in CI from the secret via `cat > ~/.dbt/profiles.yml`
+- SQLFluff dbt templater requires `dbt deps` to run before linting (needs packages installed)
+- Squash merges on GitHub create a new SHA — after merge, sync local main with `git fetch origin && git reset --hard origin/main`, not `git pull` (pull creates a spurious merge commit)
+
+**dbt docs — how to view the artifact:**
+CD uploads a `dbt-docs` artifact (manifest.json + catalog.json + index.html) to each run.
+Download from **Actions → CD → latest run → Artifacts → dbt-docs**, unzip, then serve locally:
+```
+python -m http.server 8080
+```
+Open `http://localhost:8080`. Direct file:// access won't work (browser blocks local JSON reads).
+**Future improvement:** host docs persistently on GitHub Pages, S3, or dbt Cloud — planned for Phase 3d alongside the Semantic Layer (ADR-021).
 
 Phase 3b is complete and merged (PR #16).
 
@@ -156,15 +181,6 @@ Phase 3b is complete and merged (PR #16).
   snapshot now controls its own strategy. Keep this in mind — never set a global snapshot
   strategy unless all snapshots share the same source column.
 
-**Phase 3c scope (next session):**
-Branch: `feature/phase-3c-tests-docs-cicd`
-1. Source freshness — warn/error thresholds on `orders` and `payment_events` sources
-2. Custom singular test — `tests/assert_order_totals_balance.sql` (order total vs sum of line items)
-3. Macros — at least one utility macro beyond `generate_schema_name`
-4. `dbt docs generate` — confirm docs site renders with lineage graph and exposure nodes
-5. GitHub Actions CI — `ci.yml` (PR: SQLFluff + `dbt build --select state:modified+`) and
-   `cd.yml` (merge to main: full `dbt build` + `dbt docs generate` + manifest upload)
-6. Snowflake credentials stored as GitHub Actions secrets — never in code
 
 Phase 2b is complete and merged (PR #13).
 
