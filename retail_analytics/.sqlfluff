@@ -1,0 +1,13 @@
+[sqlfluff]
+templater = dbt
+dialect = snowflake
+# Exclude rules that conflict with our column-alignment style convention:
+#   LT01 - we deliberately pad 'as' to align column aliases
+#   LT09 - single-target selects are allowed on the same line as SELECT
+#   ST06 - we order columns for readability, not by SQLFluff's wildcard-first rule
+#   ST07 - USING is acceptable; we don't mandate ON everywhere
+exclude_rules = LT01, LT09, ST06, ST07
+
+[sqlfluff:indentation]
+indent_unit = space
+tab_space_size = 4
