@@ -39,6 +39,10 @@ jobs:
                 threads: 4
           EOF
 
+      - name: dbt deps
+        working-directory: retail_analytics
+        run: dbt deps
+
       - name: Lint SQL
         working-directory: retail_analytics
         run: sqlfluff lint models/ --dialect snowflake --templater dbt
