@@ -132,7 +132,22 @@ All Phase 1 work is on `main` — no PRs opened yet. Before or alongside Phase 2
 
 ## Current Phase
 
-**Phase 3d — Semantic Layer (next)**
+**Phase 3e — Semantic Layer (next)**
+
+Phase 3d (incremental fact tables) is complete and merged (PR #20).
+
+**Phase 3d delivered:**
+- `models/marts/fct_orders.sql` — incremental, unique_key=order_id, -3d lookback on updated_at
+- `models/marts/fct_payments.sql` — incremental, unique_key=payment_id, GREATEST across all four lifecycle timestamps with COALESCE sentinels for nullable dates
+- `models/marts/fct_returns.sql` — incremental, unique_key=order_id, anchored on max(returned_at) from {{ this }}
+- `models/marts/schema.yml` — dbt_utils.recency warn test on fct_orders (pipeline health canary)
+- `.sqlfluff` — added LT02 and RF02 to excludes (Jinja templater false positives in is_incremental blocks)
+
+**Key facts:**
+- `on_schema_change = 'sync_all_columns'` on all three — auto-adds columns, fails loudly on removals
+- dim_* tables stay as `table` materialization — small and SCD2 requires full rebuilds
+- After first merge, must run `dbt run --select fct_orders fct_payments fct_returns --full-refresh --target prod` to establish baseline before incremental logic activates
+- Full-refresh runbook: always cascade fct_orders + fct_returns together; avoid during business hours (DROP TABLE creates brief gap)
 
 Phase 3c is complete and merged (PR #18).
 
