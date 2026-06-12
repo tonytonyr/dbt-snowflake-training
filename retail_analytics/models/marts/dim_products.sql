@@ -26,12 +26,7 @@ final as (
             (unit_price - cost_price) / nullif(unit_price, 0),
             4
         )                                          as gross_margin_pct,
-        case
-            when unit_price < 25    then 'budget'
-            when unit_price < 75    then 'mid_range'
-            when unit_price < 200   then 'premium'
-            else                         'luxury'
-        end                                        as price_band,
+        {{ classify_price_band('unit_price') }}        as price_band,
         dbt_valid_from,
         dbt_scd_id
     from products

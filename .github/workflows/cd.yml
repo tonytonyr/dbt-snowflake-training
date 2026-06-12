@@ -1,0 +1,51 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    name: dbt build + docs
+    runs-on: ubuntu-latest
+    env:
+      SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dbt-snowflake
+        run: pip install dbt-snowflake
+
+      - name: dbt deps
+        working-directory: retail_analytics
+        run: dbt deps
+
+      - name: dbt build (full)
+        working-directory: retail_analytics
+        run: dbt build --target prod
+
+      - name: dbt docs generate
+        working-directory: retail_analytics
+        run: dbt docs generate --target prod
+
+      - name: Upload manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbt-manifest
+          path: retail_analytics/target/manifest.json
+          retention-days: 30
+
+      - name: Upload docs site
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbt-docs
+          path: |
+            retail_analytics/target/manifest.json
+            retail_analytics/target/catalog.json
+            retail_analytics/target/index.html
+          retention-days: 7
