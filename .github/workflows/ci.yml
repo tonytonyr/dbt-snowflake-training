@@ -19,23 +19,34 @@ jobs:
         run: pip install sqlfluff sqlfluff-templater-dbt dbt-snowflake
 
       - name: Set up dbt profile
+        env:
+          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
         run: |
           mkdir -p ~/.dbt
-          cp retail_analytics/profiles.yml ~/.dbt/profiles.yml
+          cat > ~/.dbt/profiles.yml << EOF
+          retail_analytics:
+            target: prod
+            outputs:
+              prod:
+                type: snowflake
+                account: NHUKSVM-HV76137
+                user: tonyjrossignol
+                password: "${SNOWFLAKE_PASSWORD}"
+                role: TRANSFORMER
+                database: ANALYTICS
+                warehouse: TRANSFORMING_WH
+                schema: staging
+                threads: 4
+          EOF
 
       - name: Lint SQL
         working-directory: retail_analytics
-        env:
-          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
         run: sqlfluff lint models/ --dialect snowflake --templater dbt
 
   build:
     name: dbt build (modified models)
     runs-on: ubuntu-latest
     needs: lint
-    env:
-      SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
-
     steps:
       - uses: actions/checkout@v4
 
@@ -46,13 +57,33 @@ jobs:
       - name: Install dbt-snowflake
         run: pip install dbt-snowflake
 
+      - name: Set up dbt profile
+        env:
+          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+        run: |
+          mkdir -p ~/.dbt
+          cat > ~/.dbt/profiles.yml << EOF
+          retail_analytics:
+            target: prod
+            outputs:
+              prod:
+                type: snowflake
+                account: NHUKSVM-HV76137
+                user: tonyjrossignol
+                password: "${SNOWFLAKE_PASSWORD}"
+                role: TRANSFORMER
+                database: ANALYTICS
+                warehouse: TRANSFORMING_WH
+                schema: staging
+                threads: 4
+          EOF
+
       - name: Download production manifest
         uses: dawidd6/action-download-artifact@v6
         with:
           workflow: cd.yml
           name: dbt-manifest
           path: retail_analytics/state/
-        # Allow first run when no artifact exists yet
         continue-on-error: true
 
       - name: dbt deps

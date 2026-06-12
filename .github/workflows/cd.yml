@@ -8,9 +8,6 @@ jobs:
   deploy:
     name: dbt build + docs
     runs-on: ubuntu-latest
-    env:
-      SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
-
     steps:
       - uses: actions/checkout@v4
 
@@ -20,6 +17,27 @@ jobs:
 
       - name: Install dbt-snowflake
         run: pip install dbt-snowflake
+
+      - name: Set up dbt profile
+        env:
+          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+        run: |
+          mkdir -p ~/.dbt
+          cat > ~/.dbt/profiles.yml << EOF
+          retail_analytics:
+            target: prod
+            outputs:
+              prod:
+                type: snowflake
+                account: NHUKSVM-HV76137
+                user: tonyjrossignol
+                password: "${SNOWFLAKE_PASSWORD}"
+                role: TRANSFORMER
+                database: ANALYTICS
+                warehouse: TRANSFORMING_WH
+                schema: staging
+                threads: 4
+          EOF
 
       - name: dbt deps
         working-directory: retail_analytics
