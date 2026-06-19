@@ -132,7 +132,37 @@ All Phase 1 work is on `main` — no PRs opened yet. Before or alongside Phase 2
 
 ## Current Phase
 
-**Phase 3e — Semantic Layer (next)**
+**Phase 4 — CDC Ingestion (next)**
+
+Phase 3e (Semantic Layer) is complete and merged (PR #22).
+
+**Phase 3e delivered:**
+- `models/marts/metricflow_time_spine.sql` — Snowflake GENERATOR, 10-year window 2022–2032, `agg_time_dimension` registered via `+meta: time_spine: true` in `dbt_project.yml`
+- `models/semantic_models/sem_orders.yml` — primary entity `order`, foreign entity `customer`, time dimension `order_date`, 6 measures (order_count, revenue, gross_revenue, gross_margin, returned_orders, cancelled_orders); all measures carry `agg_time_dimension: order_date`
+- `models/semantic_models/sem_customers.yml` — primary entity `customer`, 5 dimensions (cohort_month, cohort_year, state, customer_segment, is_active)
+- `models/semantic_models/sem_products.yml` — primary entity `product`, 2 dimensions (product_category, price_band)
+- `models/metrics/retail_metrics.yml` — 7 metrics: order_count, revenue, average_order_value, returned_orders, return_rate, cumulative_revenue, revenue_wow (WoW uses `offset_window: "1 week"` on a revenue input alias)
+- `models/saved_queries/retail_saved_queries.yml` — 3 saved queries using `Dimension()`/`TimeDimension()` string syntax required by dbt 1.9+
+- `requirements.txt` — explicit pip deps (`dbt-snowflake>=1.9.0`, `dbt-metricflow[snowflake]>=1.8.0`)
+- CI: `dbt parse` step validates semantic manifest on every PR; `dbt-metricflow[snowflake]` in pip install
+
+**Key gotchas fixed this session:**
+- dbt 1.9+ removed `metric-paths`, `saved-queries-paths`, `semantic-model-paths` as top-level `dbt_project.yml` keys — files must live inside `models/` and are auto-discovered
+- `snowflake-labs/dbt_semantic_view` does not exist in the dbt Hub package index — Snowflake Semantic Views publishing is a manual `dbt run-operation` step, not a package dependency
+- Derived metrics reference other **metrics**, not measures directly — `returned_orders` needed its own simple metric wrapper before `return_rate` could compose it
+- MetricFlow requires `measure` as an object (`{name: ...}`) not a bare string in dbt 1.11
+- Saved query `group_by` requires `"Dimension('entity__dim')"` / `"TimeDimension('metric_time', 'week')"` string syntax — plain `metric_time__week` is CLI-only
+- Every measure needs `agg_time_dimension` pointing to a time dimension so MetricFlow can resolve `metric_time` queries
+- `mf validate-configs` cannot find `~/.dbt/profiles.yml` in CI — replaced with `dbt parse` which uses the same profile path as all other dbt commands
+
+**Post-merge manual steps (run locally against prod):**
+```bash
+cd retail_analytics
+export SNOWFLAKE_PASSWORD="..."
+dbt run --select metricflow_time_spine --target prod  # create the time spine table
+mf list metrics                                       # verify 7 metrics visible
+mf query --metrics revenue --group-by metric_time__week  # smoke test
+```
 
 Phase 3d (incremental fact tables) is complete and merged (PR #20).
 
