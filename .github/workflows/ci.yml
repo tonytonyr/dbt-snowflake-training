@@ -98,9 +98,9 @@ jobs:
         working-directory: retail_analytics
         run: dbt deps
 
-      - name: Validate MetricFlow configs
+      - name: dbt parse (validates semantic manifest)
         working-directory: retail_analytics
-        run: mf validate-configs
+        run: dbt parse --target prod
 
       - name: dbt build (state:modified+)
         working-directory: retail_analytics
