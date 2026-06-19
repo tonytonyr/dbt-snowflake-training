@@ -15,8 +15,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install SQLFluff
-        run: pip install sqlfluff sqlfluff-templater-dbt dbt-snowflake
+      - name: Install dependencies
+        run: pip install sqlfluff sqlfluff-templater-dbt dbt-snowflake dbt-metricflow[snowflake]
 
       - name: Set up dbt profile
         env:
@@ -58,8 +58,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dbt-snowflake
-        run: pip install dbt-snowflake
+      - name: Install dependencies
+        run: pip install dbt-snowflake dbt-metricflow[snowflake]
 
       - name: Set up dbt profile
         env:
@@ -93,6 +93,10 @@ jobs:
       - name: dbt deps
         working-directory: retail_analytics
         run: dbt deps
+
+      - name: Validate MetricFlow configs
+        working-directory: retail_analytics
+        run: mf validate-configs
 
       - name: dbt build (state:modified+)
         working-directory: retail_analytics

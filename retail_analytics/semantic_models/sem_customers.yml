@@ -1,0 +1,42 @@
+version: 2
+
+semantic_models:
+  - name: customers
+    description: >
+      Semantic model on the dim_customers mart. Provides customer-level dimensions
+      for cross-join analysis — e.g. revenue by cohort_month or customer_segment
+      when queried alongside the orders semantic model via the shared customer entity.
+    model: ref('dim_customers')
+
+    entities:
+      - name: customer
+        type: primary
+        expr: customer_id
+
+    dimensions:
+      - name: cohort_month
+        type: categorical
+        expr: cohort_month
+        description: Year-month (YYYY-MM) the customer signed up.
+
+      - name: cohort_year
+        type: categorical
+        expr: cohort_year
+        description: Year the customer signed up.
+
+      - name: state
+        type: categorical
+        expr: state
+        description: US state abbreviation of the customer's registered address.
+
+      - name: customer_segment
+        type: categorical
+        expr: customer_segment
+        description: >
+          Behavioural segment: never_ordered, one_time (1 order), repeat (2-4),
+          loyal (5+).
+
+      - name: is_active
+        type: categorical
+        expr: is_active
+        description: True if the customer placed at least one order in the past 365 days.

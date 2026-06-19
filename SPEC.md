@@ -488,7 +488,7 @@ Branch: `feature/phase-3d-semantic-layer`
 The dbt Semantic Layer (powered by MetricFlow) sits between your mart models and downstream consumers. Instead of each BI tool computing `revenue` its own way, you define it once in YAML and every tool queries through the same definition:
 
 ```
-fct_orders (mart)  →  semantic model (entities + measures)  →  metrics YAML  →  dbt sl query / BI tool
+fct_orders (mart)  →  semantic model (entities + measures)  →  metrics YAML  →  mf query / BI tool
 ```
 
 MetricFlow translates metric queries into warehouse SQL at query time — it does not materialize additional tables.
@@ -588,16 +588,16 @@ Pre-defined metric+dimension combos consumable by BI tools without ad-hoc query 
 
 ```bash
 # List available metrics
-dbt sl list metrics
+mf list metrics
 
 # Query revenue by week
-dbt sl query --metrics revenue --group-by metric_time__week
+mf query --metrics revenue --group-by metric_time__week
 
 # Query AOV by product category
-dbt sl query --metrics average_order_value --group-by product_category
+mf query --metrics average_order_value --group-by product_category
 
 # Return rate month over month
-dbt sl query --metrics return_rate --group-by metric_time__month --order metric_time__month
+mf query --metrics return_rate --group-by metric_time__month --order metric_time__month
 ```
 
 #### Snowflake Semantic Views Integration (ADR-021)
@@ -614,7 +614,7 @@ The `dbt_semantic_view` package (Snowflake Labs, GA March 2026) publishes dbt me
 3. Verify in Snowflake UI: `ANALYTICS.marts` schema should show semantic view objects
 4. Query directly from any SQL client — no dbt CLI required
 
-**Comparison exercise:** Query the same metric two ways — `dbt sl query` (MetricFlow path) vs. direct Snowflake Semantic View SQL. Observe identical results, different execution paths.
+**Comparison exercise:** Query the same metric two ways — `mf query` (MetricFlow path) vs. direct Snowflake Semantic View SQL. Observe identical results, different execution paths.
 
 #### Key Concepts Demonstrated
 
@@ -627,7 +627,7 @@ The `dbt_semantic_view` package (Snowflake Labs, GA March 2026) publishes dbt me
 | Snowflake Semantic Views | Native Snowflake objects — no dbt runtime needed at query time |
 | dbt vs. Snowflake paths | Two valid approaches; knowing both is the interview differentiator |
 
-**Deliverable:** `dbt sl list metrics` returns all 6 metrics. `dbt sl query --metrics revenue --group-by metric_time__week` returns correct weekly totals matching raw SQL against `fct_orders`. Snowflake Semantic Views visible in the Snowflake UI.
+**Deliverable:** `mf list metrics` returns all 6 metrics. `mf query --metrics revenue --group-by metric_time__week` returns correct weekly totals matching raw SQL against `fct_orders`. Snowflake Semantic Views visible in the Snowflake UI.
 
 ---
 
@@ -710,6 +710,102 @@ Branch: `feature/phase-6-portfolio-polish`
 
 ---
 
+### Phase 7 — Stretch: Iceberg + Trino Lakehouse Migration (optional, post-Phase 6)
+
+**Goal:** Migrate the Snowflake mart layer to an open lakehouse architecture using Apache Iceberg as the table format and Trino as the query engine. Demonstrate that the dbt transformation logic is largely portable across execution engines by swapping the adapter.
+
+Branch: `feature/phase-7-iceberg-trino`
+
+**Status:** Under consideration — see ADR-023 for open questions and proposed scope.
+
+#### Motivation
+
+Iceberg + Trino (or Spark) is the dominant open lakehouse pattern at companies running large-scale data platforms. Demonstrating a migration story — same dbt DAG, same SQL, different adapter — directly answers the "what happens when you need to move off Snowflake?" interview question.
+
+#### Infrastructure (Docker Compose additions)
+
+| Service | Role |
+|---------|------|
+| **MinIO** | S3-compatible local object store — holds Iceberg data files |
+| **Nessie** | Iceberg catalog — tracks table metadata, supports Git-like branching |
+| **Trino** | Distributed SQL query engine — reads/writes Iceberg tables via Nessie connector |
+
+#### Migration steps
+
+1. Export Snowflake marts to Parquet (reuse the `export_duckdb.py` pattern from Phase 2a)
+2. Upload Parquet to MinIO; register as Iceberg tables in Nessie
+3. Add a `trino` profile output to `profiles.yml` pointing at the local Trino cluster
+4. Install `dbt-trino`; run `dbt build --target trino`
+5. Validate results: same metric queries, same output from both Snowflake and Trino paths
+6. Document what changed (adapter, catalog config, any dialect guards) vs. what didn't (model SQL, DAG, tests, MetricFlow definitions)
+
+#### Key Concepts Demonstrated
+
+| Concept | Why It Matters |
+|---------|---------------|
+| Apache Iceberg table format | Open standard — data readable by any engine (Trino, Spark, Snowflake, DuckDB) |
+| Nessie catalog | Git-like branching for data — create a branch, test a migration, merge or discard |
+| `dbt-trino` adapter | Portable transformation logic — DAG and SQL survive an engine swap |
+| MinIO as local S3 | Test object-store patterns without cloud costs |
+| Two-engine comparison | Same query, same result, different execution path — the migration proof point |
+
+**Deliverable:** `dbt build --target trino` passes all models and tests. `mf query --metrics revenue --group-by metric_time__week` returns identical results against both Snowflake and Trino targets.
+
+---
+
+### Phase 8 — Stretch: Local Dev Target (DuckDB or Postgres) to Minimize Snowflake Cost
+
+**Goal:** Add a cheap local dev target so that day-to-day `dbt run` iteration never touches Snowflake credits or prod tables. CI and prod continue to target Snowflake; local development targets DuckDB or Postgres.
+
+Branch: `feature/phase-8-local-dev-target`
+
+**Status:** Under consideration — see ADR-022 for option analysis.
+
+#### Motivation
+
+Snowflake trial credits are finite. Aggressive local iteration (debugging a model, iterating on a macro, running tests) should be free. The `DBT_TARGET` environment variable pattern — `dev` points at DuckDB/Postgres, `prod` points at Snowflake — is a common real-world setup and worth demonstrating explicitly.
+
+#### Option A — DuckDB
+
+```yaml
+# profiles.yml addition
+retail_analytics:
+  outputs:
+    dev:
+      type: duckdb
+      path: /workspace/retail_analytics/dev.duckdb
+      threads: 4
+    prod:
+      type: snowflake
+      # ... existing Snowflake config
+  target: "{{ env_var('DBT_TARGET', 'dev') }}"
+```
+
+**Trade-off:** DuckDB dialect diverges from Snowflake on `TABLE(GENERATOR(...))`, some window functions, and Snowflake-specific materializations. Models using these constructs need `{{ target.type == 'snowflake' }}` guards.
+
+#### Option B — Postgres
+
+```yaml
+dev:
+  type: postgres
+  host: localhost
+  port: 5432
+  dbname: retail_dev
+  # ... rest of Postgres config
+```
+
+**Trade-off:** More standard SQL dialect than DuckDB; closer to what Phase 4 CDC work will use against the operational Postgres. Requires Docker running locally.
+
+#### Key Concepts Demonstrated
+
+| Concept | Why It Matters |
+|---------|---------------|
+| Multi-target `profiles.yml` | Isolate dev from prod; control via env var |
+| `{{ target.type }}` guards | Dialect-aware SQL for cross-adapter compatibility |
+| Credit-aware development | Local dev = free; CI/prod = intentional Snowflake spend |
+
+---
+
 ## CI/CD Summary
 
 | Stage | Tool | Trigger | What Runs |
@@ -735,3 +831,5 @@ Branch: `feature/phase-6-portfolio-polish`
 | 2 | CI Snowflake schema strategy — shared dev schema vs. ephemeral per-PR | Decide at Phase 3 |
 | 3 | Confirm RAM headroom before Phase 5 (Airflow) | Check at Phase 4 completion |
 | 4 | Slack workspace for Airflow notifications | Optional — substitute log-only |
+| 5 | Local dev target (DuckDB vs Postgres) to minimize Snowflake credit burn | Under consideration — ADR-022 |
+| 6 | Iceberg + Trino lakehouse migration as stretch phase | Under consideration — ADR-023 |

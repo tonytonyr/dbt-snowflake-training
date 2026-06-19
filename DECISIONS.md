@@ -471,14 +471,14 @@ Add the dbt Semantic Layer as Phase 3d, delivered immediately after the mart lay
 **Alternatives Considered:**
 - Defer to a standalone future project: misses the opportunity to show semantic layer and mart layer as a natural progression — the data is already perfectly shaped for it.
 - MetricFlow only, skip Snowflake Semantic Views: valid, but the Snowflake-native path is directly relevant to target employers (Snowflake GA March 2026 is very current) and adds a useful "two paths, same answer" comparison.
-- Full BI tool integration (Tableau, Hex): adds value but introduces external dependencies and account setup friction. `dbt sl query` via CLI is sufficient to demonstrate the pattern.
+- Full BI tool integration (Tableau, Hex): adds value but introduces external dependencies and account setup friction. `mf query` via CLI is sufficient to demonstrate the pattern.
 
 **Consequences:**
 - `dbt_project.yml` must configure the MetricFlow time spine model.
 - `packages.yml` gains `dbt-metricflow[snowflake]` and `snowflake-labs/dbt_semantic_view`.
 - Project structure gains `semantic_models/`, `metrics/`, and `saved_queries/` directories under `retail_analytics/`.
 - Phase 3d is gated on Phase 3b (mart models must exist before semantic models can reference them).
-- CI/CD (`ci.yml`) should include `dbt sl validate` to catch metric definition regressions on PR.
+- CI/CD (`ci.yml`) should include `mf validate-configs` to catch metric definition regressions on PR.
 - Interview narrative updated to mention MetricFlow and Snowflake Semantic Views — a meaningful differentiator for Snowflake-focused roles.
 
 ---
@@ -505,3 +505,76 @@ Batch step logic is implemented as discrete callable units (stored procedures or
 - Phase 2–3 dbt models are compiled and their SQL registered as Snowflake Task payloads. Students observe Task run history in `INFORMATION_SCHEMA.TASK_HISTORY`.
 - Airflow + Cosmos (ADR-004) is not removed from scope — it activates in Phase 4 as the cross-system coordinator. ADR-004 remains active.
 - Task schedule intervals must be recomputed and Tasks recreated whenever `compression_ratio` changes. This is a known operational cost accepted for simplicity.
+
+---
+
+### ADR-022 — Dev target uses DuckDB (or Postgres) to avoid Snowflake costs and prod risk
+**Date:** 2026-06-12
+**Status:** Under Consideration
+**Tags:** [architecture] [developer-experience] [cost]
+
+**Context:**
+All development in Phases 1–3 runs directly against the Snowflake trial account. This has two downsides: (1) every `dbt run` consumes Snowflake credits, and trial credits are finite — aggressive local iteration can exhaust them before Phase 4 CDC work begins; (2) an errant `dbt run --full-refresh` or schema migration in dev can overwrite tables that are also used for testing and demos, since dev and prod share the same account.
+
+The project already has DuckDB as the simulator's local database (ADR-006 superseded by ADR-021 and the Phase 1 rewrite). dbt supports DuckDB via `dbt-duckdb` as a fully functional dev target — models, tests, snapshots, and incremental logic all work against it locally with no warehouse spin-up and zero cost.
+
+Alternatively, a local Postgres instance (via Docker Compose) can serve as the dev target using `dbt-postgres`, which is closer to a real warehouse dialect than DuckDB but requires running a container.
+
+**Decision:**
+Not yet made. Two viable paths identified:
+
+**Option A — DuckDB dev target:**
+- Add a `dev` profile output in `profiles.yml` pointing to a local `dev.duckdb` file
+- Set `DBT_TARGET=dev` locally; CI and prod continue to target Snowflake
+- Pros: zero cost, zero setup, instant startup, works offline
+- Cons: DuckDB SQL dialect diverges from Snowflake in a few places (e.g., `GENERATOR`, some date functions, `COPY INTO`); Snowflake-specific materializations may need dialect guards
+
+**Option B — Postgres dev target:**
+- Spin up a Postgres container in Docker Compose; add a `dev` profile output
+- Pros: `dbt-postgres` is the most battle-tested dbt adapter; dialect is more standard than DuckDB
+- Cons: requires Docker running locally; still diverges from Snowflake on warehouse-specific features (clustering, stages, Snowflake Tasks)
+
+**Alternatives Considered:**
+- Snowflake dev schema (current approach): simple but expensive and carries prod-bleed risk
+- Separate Snowflake trial account for dev: eliminates prod-bleed risk but doesn't solve credit burn and adds credential management overhead
+
+**Consequences (if adopted):**
+- `profiles.yml` gains a `dev` output alongside the existing `prod` output; target is controlled by `DBT_TARGET` env var
+- Any Snowflake-specific SQL (e.g., `TABLE(GENERATOR(...))` in `dim_date`, `metricflow_time_spine`) will need conditional dialect handling via `{{ target.type }}` guards or separate model variants
+- CI continues to run against Snowflake using the `prod` profile — slim CI credit burn is acceptable; it's local iteration that's the cost concern
+- This pattern (cheap local dev target + real warehouse for CI/prod) is a common real-world setup worth demonstrating
+
+---
+
+### ADR-023 — Iceberg + Trino lakehouse migration as stretch phase
+**Date:** 2026-06-12
+**Status:** Under Consideration
+**Tags:** [architecture] [stretch] [lakehouse]
+
+**Context:**
+After the core project phases are complete (Phases 1–6), there is an opportunity to extend the project with a migration from Snowflake to an open lakehouse architecture using Apache Iceberg as the table format and Trino (or Spark) as the query engine. This represents a meaningful shift in the modern data stack landscape: many enterprises are moving toward open formats to avoid warehouse vendor lock-in, and the Iceberg + Trino pattern is appearing frequently in interviews at companies with large-scale data platforms (DoorDash, Instacart, Stripe, Airbnb).
+
+The stretch phase would demonstrate the ability to run the same dbt transformation logic against a different execution engine by swapping the dbt adapter (`dbt-trino` in place of `dbt-snowflake`) while keeping the DAG and model SQL largely unchanged.
+
+**Decision:**
+Not yet made. Captured here as an explicit candidate for a stretch phase rather than an ad-hoc addition. Key questions to resolve before committing:
+1. Does `dbt-trino` support all features used in this project (incremental models, snapshots, MetricFlow)?
+2. What is the local infrastructure cost — Trino + a local Iceberg catalog (Nessie or a Hive metastore) adds meaningful Docker Compose complexity
+3. What is the intended interview narrative — migration story, or parallel deployment?
+
+**Proposed scope (if adopted):**
+- Stand up Trino + MinIO (S3-compatible local object store) + Nessie (Iceberg catalog) via Docker Compose
+- Export Snowflake marts to Parquet; register as Iceberg tables in Nessie
+- Swap `profiles.yml` target to `dbt-trino`; run `dbt build` against Trino
+- Demonstrate same query results from both Snowflake and Trino paths
+- Document the migration story: what changed (adapter, catalog config), what didn't (model SQL, DAG, tests)
+
+**Alternatives Considered:**
+- Delta Lake + Spark: larger ecosystem but heavier local infrastructure; Spark is less relevant to the target employer set than Trino
+- Databricks: directly relevant but requires a paid account; not feasible as a local-first portfolio project
+- Skip entirely: the core project already demonstrates enough depth; the stretch is additive, not required
+
+**Consequences (if adopted):**
+- Added to Phase 7 (Stretch) in SPEC.md
+- Does not affect Phases 1–6; can be attempted after Phase 6 portfolio polish is complete
+- Iceberg/Trino familiarity is a meaningful differentiator for staff/principal DE roles at companies running open lakehouses alongside or instead of cloud warehouses

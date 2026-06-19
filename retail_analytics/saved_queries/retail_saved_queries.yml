@@ -1,0 +1,44 @@
+version: 2
+
+saved_queries:
+  - name: weekly_revenue_by_segment
+    label: Weekly Revenue by Customer Segment
+    description: >
+      Revenue and order count broken down by customer behavioural segment (never_ordered,
+      one_time, repeat, loyal), grouped by week. Useful for tracking which segments
+      are driving growth or declining week-over-week.
+    query_params:
+      metrics:
+        - revenue
+        - order_count
+      group_by:
+        - metric_time__week
+        - customer__customer_segment
+
+  - name: customer_cohort_aov
+    label: Average Order Value by Signup Cohort
+    description: >
+      Average order value sliced by the month customers signed up (cohort_month) and
+      their behavioural segment. Use to identify whether early cohorts have higher
+      lifetime AOV than recent ones, or whether loyal customers spend more per order.
+    query_params:
+      metrics:
+        - average_order_value
+        - order_count
+      group_by:
+        - customer__cohort_month
+        - customer__customer_segment
+
+  - name: return_rate_trend
+    label: Monthly Return Rate Trend
+    description: >
+      Return rate aggregated by calendar month. Use to spot seasonality in returns
+      (e.g. post-holiday spikes) or to track the impact of fulfilment/product changes
+      on return behaviour over time.
+    query_params:
+      metrics:
+        - return_rate
+        - order_count
+        - revenue
+      group_by:
+        - metric_time__month

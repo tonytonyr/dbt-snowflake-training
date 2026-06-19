@@ -10,6 +10,9 @@ test-paths: ["tests"]
 seed-paths: ["seeds"]
 macro-paths: ["macros"]
 snapshot-paths: ["snapshots"]
+semantic-model-paths: ["semantic_models"]
+metric-paths: ["metrics"]
+saved-queries-paths: ["saved_queries"]
 
 clean-targets:
   - target
@@ -29,6 +32,9 @@ models:
     marts:
       +schema: marts
       +materialized: table
+      metricflow_time_spine:
+        +meta:
+          time_spine: true
 
 snapshots:
   retail_analytics:
