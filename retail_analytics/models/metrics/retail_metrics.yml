@@ -25,6 +25,13 @@ metrics:
         - revenue
         - order_count
 
+  - name: returned_orders
+    label: Returned Orders
+    description: Count of orders that were returned.
+    type: simple
+    type_params:
+      measure: returned_orders
+
   - name: return_rate
     label: Return Rate
     description: >
