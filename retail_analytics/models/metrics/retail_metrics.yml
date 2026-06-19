@@ -6,14 +6,16 @@ metrics:
     description: Total number of orders placed.
     type: simple
     type_params:
-      measure: order_count
+      measure:
+        name: order_count
 
   - name: revenue
     label: Revenue
     description: Total order revenue (sum of total_amount including tax and shipping).
     type: simple
     type_params:
-      measure: revenue
+      measure:
+        name: revenue
 
   - name: average_order_value
     label: Average Order Value
@@ -30,7 +32,8 @@ metrics:
     description: Count of orders that were returned.
     type: simple
     type_params:
-      measure: returned_orders
+      measure:
+        name: returned_orders
 
   - name: return_rate
     label: Return Rate
@@ -49,7 +52,8 @@ metrics:
     description: Running total of revenue from the beginning of the reporting window.
     type: cumulative
     type_params:
-      measure: revenue
+      measure:
+        name: revenue
 
   - name: revenue_wow
     label: Revenue Week-over-Week Growth %
@@ -63,4 +67,4 @@ metrics:
         - name: revenue
         - name: revenue
           alias: revenue_prior_week
-          offset_window: 1 week
+          offset_window: "1 week"
