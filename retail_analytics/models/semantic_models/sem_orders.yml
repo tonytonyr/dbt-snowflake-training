@@ -52,28 +52,34 @@ semantic_models:
         description: Total number of orders.
         agg: count
         expr: order_id
+        agg_time_dimension: order_date
 
       - name: revenue
         description: Sum of total_amount across all orders.
         agg: sum
         expr: total_amount
+        agg_time_dimension: order_date
 
       - name: gross_revenue
         description: Sum of gross_revenue (line item totals before tax/shipping).
         agg: sum
         expr: gross_revenue
+        agg_time_dimension: order_date
 
       - name: gross_margin
         description: Sum of gross margin across all orders.
         agg: sum
         expr: gross_margin
+        agg_time_dimension: order_date
 
       - name: returned_orders
         description: Count of returned orders.
         agg: sum
         expr: "CASE WHEN is_returned THEN 1 ELSE 0 END"
+        agg_time_dimension: order_date
 
       - name: cancelled_orders
         description: Count of cancelled orders.
         agg: sum
         expr: "CASE WHEN is_cancelled THEN 1 ELSE 0 END"
+        agg_time_dimension: order_date

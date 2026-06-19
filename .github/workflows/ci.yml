@@ -43,6 +43,10 @@ jobs:
         working-directory: retail_analytics
         run: dbt deps
 
+      - name: dbt compile (validates semantic manifest before SQLFluff)
+        working-directory: retail_analytics
+        run: dbt compile --target prod --no-write-json
+
       - name: Lint SQL
         working-directory: retail_analytics
         run: sqlfluff lint models/ --dialect snowflake --templater dbt
