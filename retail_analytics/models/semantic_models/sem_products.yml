@@ -1,0 +1,28 @@
+version: 2
+
+semantic_models:
+  - name: products
+    description: >
+      Semantic model on the dim_products mart. Provides product-level dimensions
+      for category and price-band analysis. No direct entity join path to the
+      orders semantic model exists at this grain — order-item level analysis
+      would require an order_items semantic model (deferred, out of current scope).
+    model: ref('dim_products')
+
+    entities:
+      - name: product
+        type: primary
+        expr: product_id
+
+    dimensions:
+      - name: product_category
+        type: categorical
+        expr: product_category
+        description: High-level product category (e.g. Electronics, Clothing).
+
+      - name: price_band
+        type: categorical
+        expr: price_band
+        description: >
+          Price tier: budget (<$25), mid_range ($25-$74), premium ($75-$199),
+          luxury ($200+).

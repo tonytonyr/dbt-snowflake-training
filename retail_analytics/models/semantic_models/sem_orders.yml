@@ -1,0 +1,85 @@
+version: 2
+
+semantic_models:
+  - name: orders
+    description: >
+      Semantic model on the fct_orders mart. Primary grain is one row per order.
+      Joins to the customers semantic model via the customer entity for cross-domain
+      metric queries (e.g. revenue by customer segment).
+    model: ref('fct_orders')
+
+    entities:
+      - name: order
+        type: primary
+        expr: order_id
+      - name: customer
+        type: foreign
+        expr: customer_id
+
+    dimensions:
+      - name: order_date
+        type: time
+        type_params:
+          time_granularity: day
+        expr: order_date
+
+      - name: order_state
+        type: categorical
+        expr: order_state
+
+      - name: payment_method
+        type: categorical
+        expr: payment_method
+
+      - name: payment_state
+        type: categorical
+        expr: payment_state
+
+      - name: is_returned
+        type: categorical
+        expr: is_returned
+
+      - name: is_cancelled
+        type: categorical
+        expr: is_cancelled
+
+      - name: is_on_time
+        type: categorical
+        expr: is_on_time
+
+    measures:
+      - name: order_count
+        description: Total number of orders.
+        agg: count
+        expr: order_id
+        agg_time_dimension: order_date
+
+      - name: revenue
+        description: Sum of total_amount across all orders.
+        agg: sum
+        expr: total_amount
+        agg_time_dimension: order_date
+
+      - name: gross_revenue
+        description: Sum of gross_revenue (line item totals before tax/shipping).
+        agg: sum
+        expr: gross_revenue
+        agg_time_dimension: order_date
+
+      - name: gross_margin
+        description: Sum of gross margin across all orders.
+        agg: sum
+        expr: gross_margin
+        agg_time_dimension: order_date
+
+      - name: returned_orders
+        description: Count of returned orders.
+        agg: sum
+        expr: "CASE WHEN is_returned THEN 1 ELSE 0 END"
+        agg_time_dimension: order_date
+
+      - name: cancelled_orders
+        description: Count of cancelled orders.
+        agg: sum
+        expr: "CASE WHEN is_cancelled THEN 1 ELSE 0 END"
+        agg_time_dimension: order_date

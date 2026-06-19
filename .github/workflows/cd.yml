@@ -15,8 +15,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dbt-snowflake
-        run: pip install dbt-snowflake
+      - name: Install dependencies
+        run: pip install dbt-snowflake dbt-metricflow[snowflake]
 
       - name: Set up dbt profile
         env:

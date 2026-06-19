@@ -29,6 +29,9 @@ models:
     marts:
       +schema: marts
       +materialized: table
+      metricflow_time_spine:
+        +meta:
+          time_spine: true
 
 snapshots:
   retail_analytics:

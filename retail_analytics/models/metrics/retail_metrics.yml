@@ -1,0 +1,70 @@
+version: 2
+
+metrics:
+  - name: order_count
+    label: Order Count
+    description: Total number of orders placed.
+    type: simple
+    type_params:
+      measure:
+        name: order_count
+
+  - name: revenue
+    label: Revenue
+    description: Total order revenue (sum of total_amount including tax and shipping).
+    type: simple
+    type_params:
+      measure:
+        name: revenue
+
+  - name: average_order_value
+    label: Average Order Value
+    description: Mean revenue per order. Divide revenue by order_count.
+    type: derived
+    type_params:
+      expr: revenue / NULLIF(order_count, 0)
+      metrics:
+        - revenue
+        - order_count
+
+  - name: returned_orders
+    label: Returned Orders
+    description: Count of orders that were returned.
+    type: simple
+    type_params:
+      measure:
+        name: returned_orders
+
+  - name: return_rate
+    label: Return Rate
+    description: >
+      Fraction of orders returned (0.0-1.0). Divide returned_orders by order_count.
+      A rising return_rate is an early signal of fulfilment or product quality issues.
+    type: derived
+    type_params:
+      expr: returned_orders / NULLIF(order_count, 0)
+      metrics:
+        - name: order_count
+        - name: returned_orders
+
+  - name: cumulative_revenue
+    label: Cumulative Revenue (All Time)
+    description: Running total of revenue from the beginning of the reporting window.
+    type: cumulative
+    type_params:
+      measure:
+        name: revenue
+
+  - name: revenue_wow
+    label: Revenue Week-over-Week Growth %
+    description: >
+      Percentage change in revenue compared with the same week one period prior.
+      Positive = growth; negative = decline. Use with metric_time__week grain.
+    type: derived
+    type_params:
+      expr: (revenue - revenue_prior_week) / NULLIF(revenue_prior_week, 0) * 100
+      metrics:
+        - name: revenue
+        - name: revenue
+          alias: revenue_prior_week
+          offset_window: "1 week"
