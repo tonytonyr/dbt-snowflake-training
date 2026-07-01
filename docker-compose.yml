@@ -1,0 +1,148 @@
+# Phase 4 CDC stack (see SPEC.md §Phase 4.0 and lessons/phase-4/phase-4-0-training.md).
+# Services are introduced per-phase (Platform Engineer rule) — this file currently
+# contains only Phase 4.0's four services. Airflow (Phase 5) is added later.
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: retail_postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    # wal_level=logical is the whole reason Postgres is in this stack — Debezium's
+    # pgoutput plugin (built into Postgres 10+) cannot stream changes without it.
+    command:
+      [
+        "postgres",
+        "-c", "wal_level=logical",
+        "-c", "max_wal_senders=10",
+        "-c", "max_replication_slots=10",
+      ]
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    mem_limit: 256m
+    cpus: 0.5
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: retail_kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      # KRaft combined mode (ADR-005) — this one node is both broker and controller.
+      # No ZooKeeper service anywhere in this file.
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,PLAINTEXT_HOST://0.0.0.0:29092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      # Fixed cluster ID so the KRaft metadata log stays valid across container
+      # restarts (as long as the kafka_data volume isn't wiped). Regenerate with
+      # `docker run --rm confluentinc/cp-kafka:7.6.1 kafka-storage random-uuid`
+      # if you ever need a fresh one.
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID}
+      KAFKA_HEAP_OPTS: "-Xmx512m -Xms512m"
+    ports:
+      - "29092:29092"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+    mem_limit: 768m
+    cpus: 1.0
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.6.1
+    container_name: retail_schema_registry
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:9092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_KAFKASTORE_TOPIC: _schemas
+      # Default compatibility for newly-created subjects (ADR-024). The three
+      # Debezium subjects get this explicitly set again in Phase 4b for clarity.
+      SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL: backward
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/subjects >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: 320m
+    cpus: 0.5
+
+  connect:
+    build:
+      context: ./docker/kafka-connect-avro
+    container_name: retail_connect
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:9092
+      CONNECT_REST_ADVERTISED_HOST_NAME: connect
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: retail-connect-cluster
+      CONNECT_CONFIG_STORAGE_TOPIC: _connect-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: _connect-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: _connect-status
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      # Avro end-to-end (ADR-024) — set at the worker level so every connector
+      # registered on this worker defaults to Avro without repeating it per-connector.
+      CONNECT_KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_INTERNAL_KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_INTERNAL_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_LOG4J_ROOT_LOGLEVEL: INFO
+      KAFKA_HEAP_OPTS: "-Xmx768m -Xms768m"
+      # CONNECT_PLUGIN_PATH is not set here — the image already defaults it to
+      # /usr/share/java/,/usr/share/confluent-hub-components/, which is where the
+      # Dockerfile's confluent-hub installs (Debezium Postgres connector + Avro
+      # converter) land. Verified empirically when this image was built.
+    ports:
+      - "8083:8083"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8083/connector-plugins >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 90s
+    # 768m was OOM-killed (exit 137) during startup — cp-kafka-connect-base
+    # scans ~15 bundled Confluent component classpaths (control-center,
+    # schema-registry, kafka-serde-tools, etc.) in addition to the two plugins
+    # this image actually installs, and that scan spikes well past the 768m JVM
+    # heap alone once container + metaspace + off-heap overhead are counted.
+    # 1536m confirmed stable empirically.
+    mem_limit: 1536m
+    cpus: 1.5
+
+volumes:
+  postgres_data:
+  kafka_data:

@@ -635,40 +635,219 @@ The `dbt_semantic_view` package (Snowflake Labs, GA March 2026) publishes dbt me
 
 ---
 
-### Phase 4 — CDC Ingestion (Days 13-15, ~8 hours)
+### Phase 4 — CDC Ingestion (Days 13-15, ~10-12 hours)
 
 **Goal:** Postgres → Debezium → Kafka → Snowflake CDC pipeline live, with Avro-encoded events
 and Schema Registry-enforced compatibility (ADR-024). The simulator's streaming mode drives
 continuous change events through the full stack.
 
-Branch: `feature/phase-4-cdc-pipeline`
+> **Erratum carried from ADR-024 / original spec:** step 2 below previously named `returns` as
+> a watched table. No such table exists — the schema (see Source Schema above) has no physical
+> `returns` table; a return is `orders.order_state = 'returned'` plus a row in `order_events`.
+> This plan watches **`orders`, `order_items`, `payments`** instead. ADR-024's decision text
+> (Avro + Schema Registry + `BACKWARD` compatibility) is unaffected and is not reopened — this
+> is a factual table-name correction, not an architectural change.
 
-1. Add Kafka (KRaft) + Debezium Connect + Schema Registry to Docker Compose
-2. Configure Debezium connector on `orders`, `order_items`, `returns`; set `key.converter` /
-   `value.converter` to `io.confluent.connect.avro.AvroConverter` pointed at the registry
-3. Set subject compatibility mode to `BACKWARD` for the three connector subjects
-4. Python consumer reads CDC events from Kafka, deserializes Avro against the registry
-   (schema ID → resolved schema), upserts to `RAW.retail` in Snowflake via MERGE
-5. Start simulator in streaming mode — watch events flow end-to-end
-6. Run `dbt run --select fct_orders+` incrementally — confirm rows picked up
-7. **Schema evolution exercise:** add a nullable column to `orders` in Postgres, confirm the
-   registry accepts the new schema version and the consumer keeps deserializing without
-   redeploying. Then attempt a breaking change (drop/retype an existing column) and confirm
-   the registry rejects the write under `BACKWARD` compatibility.
+Phase 4 is split into five sub-phases, each its own branch/PR, following the same pattern as
+Phase 2a/2b and Phase 3a–3e. **4.0 is a hard gate** — do not start connector or consumer work
+against infrastructure that hasn't been individually verified healthy.
+
+| Sub-phase | Branch | Owner (per `.agents/`) |
+|-----------|--------|------------------------|
+| 4.0 — Infra bring-up & validation | `feature/phase-4-0-infra-bringup` | Platform Engineer |
+| 4a — Simulator → Postgres migration + realism fixes | `feature/phase-4a-simulator-postgres` | Platform Engineer |
+| 4b — Debezium connector + Avro/Schema Registry | `feature/phase-4b-debezium-avro-connector` | Platform Engineer |
+| 4c — CDC consumer + Snowflake MERGE | `feature/phase-4c-cdc-consumer-snowflake` | Pipeline Engineer |
+| 4d — Schema evolution exercise | `feature/phase-4d-schema-evolution` | Pipeline Engineer |
+
+---
+
+#### Phase 4.0 — Infrastructure Bring-Up & Validation
+
+**Goal:** Every new Docker Compose service is provably healthy in isolation before any
+connector config or consumer code is written against it. This is the "0 section" — a smoke-test
+gate, not a feature.
+
+**Components added to `docker-compose.yml`:**
+
+| Service | Image family | Role | Est. RAM (per SPEC Infra Stack table) |
+|---------|--------------|------|----------------------------------------|
+| `postgres` | `postgres:16` | CDC source; simulator's only write target (ADR-006) | ~256 MB |
+| `kafka` | Confluent/Apache Kafka, KRaft mode (ADR-005) | Event transport, no ZooKeeper | ~512 MB |
+| `schema-registry` | `confluentinc/cp-schema-registry` | Avro schema contracts (ADR-024) | ~200-300 MB |
+| `connect` (Debezium) | `debezium/connect` (or `quay.io/debezium/connect`) | Runs the Postgres source connector | ~512 MB |
+
+Config notes (Platform Engineer behavioral rules apply — explicit `mem_limit`/`cpus`, no
+credentials in the compose file, idempotent restarts):
+- `postgres` service: `command: ["postgres", "-c", "wal_level=logical"]` — Debezium's
+  `pgoutput` plugin (built into Postgres 10+, no extension install needed) requires logical
+  replication enabled at the server level, not just a role grant.
+- `kafka`: KRaft envs (`KAFKA_PROCESS_ROLES`, `KAFKA_NODE_ID`, `KAFKA_CONTROLLER_QUORUM_VOTERS`)
+  per ADR-005 — no `zookeeper` service.
+- `schema-registry`: `SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS` pointed at the `kafka`
+  service; this is what makes it a "lightweight REST service backed by a Kafka topic" per
+  ADR-024, not a standalone datastore.
+- `connect`: `CONNECT_KEY_CONVERTER` / `CONNECT_VALUE_CONVERTER` set to
+  `io.confluent.connect.avro.AvroConverter` with `*.schema.registry.url` pointed at
+  `schema-registry` — set here at the worker level so every connector on this worker defaults
+  to Avro without repeating it per-connector.
+
+**Validation checklist (run before touching 4a):**
+
+| # | Check | Command |
+|---|-------|---------|
+| 0.1 | All four containers report healthy | `docker compose ps` — every service `Up (healthy)` |
+| 0.2 | Postgres has logical replication enabled | `docker compose exec postgres psql -U <user> -c "SHOW wal_level;"` → `logical` |
+| 0.3 | Kafka broker is reachable and KRaft quorum is healthy | `docker compose exec kafka kafka-broker-api-versions --bootstrap-server localhost:9092` |
+| 0.4 | Schema Registry REST API is up, no subjects yet | `curl localhost:8081/subjects` → `[]` |
+| 0.5 | Kafka Connect REST API is up and the Debezium Postgres plugin is loaded | `curl localhost:8083/connector-plugins` → includes `io.debezium.connector.postgresql.PostgresConnector` |
+| 0.6 | No secrets committed | `.env.example` updated with new placeholder vars (Postgres user/password, registry/connect URLs); real values only in `.env` (gitignored) |
+
+**Deliverable:** `docker compose up -d` brings up all four new services; all six checks above
+pass with zero connectors or consumer code written yet.
+
+---
+
+#### Phase 4a — Simulator → Postgres Migration + Realism Fixes
+
+**Goal:** The simulator's `database.type: postgres` path (already written in `simulator/db.py`,
+but never exercised against a real Postgres server — no test in `simulator/tests/` targets it)
+becomes the live write path, and stream mode actually behaves the way ADR-019 already specifies.
+This is the "revisit the simulator" work — four concrete gaps found by reviewing `db.py`,
+`main.py`, and `generator.py` against ADR-018/019 before Phase 4 starts:
+
+1. **Point config at the new Postgres service.** `simulator/config.yaml` → `database.type:
+   postgres`; `DATABASE_URL` env var (or `.env`) points at the Compose `postgres` service.
+   `simulator.duckdb` remains the Phase 1–3 default for local dbt/dev-target work (ADR-022) —
+   this is a CDC-source-only switch, not a repo-wide default change.
+
+2. **Add `simulator/requirements.txt`.** The simulator has never had a pinned dependency file —
+   `duckdb`, `faker`, `pandas`, `psycopg2` (or `psycopg2-binary`) have been installed ad hoc.
+   Postgres becoming a real, running dependency (not just an untested code branch) is the
+   forcing function to pin this now.
+
+3. **Fix a latent bug in `db.py`'s Postgres `_get_conn`** (`simulator/db.py:144-153`): on
+   exception, the connection is returned to the pool via `finally: self._pool.putconn(conn)`
+   with **no `conn.rollback()`**. Any failed statement (e.g., the email-uniqueness
+   `IntegrityError` that `stream_mode` already anticipates and retries around) leaves that
+   pooled connection in an aborted-transaction state for whichever caller borrows it next —
+   every subsequent statement on that connection fails with `current transaction is aborted`
+   until something happens to roll it back. This was invisible against DuckDB (single
+   connection, no pool) and would surface for the first time once Postgres is actually load-
+   bearing. Fix: wrap the `yield` in `try/except: conn.rollback(); raise`.
+
+4. **Implement the ADR-019 pending-transitions queue in `stream_mode`.** Today,
+   `stream_mode` (`simulator/main.py:107-156`) calls `simulate_order_lifecycle()` synchronously
+   right after `insert_order()` — the *entire* lifecycle (placed → confirmed → shipped →
+   delivered/returned, every event timestamp) is computed and written in one transaction before
+   the loop's `time.sleep(tick)`. This is the exact gap flagged in `CLAUDE.md`'s open items: a
+   CDC consumer watching this today sees one `INSERT` immediately followed by one `UPDATE`
+   already carrying the order's *final* state — not the drip of discrete, spaced-out state
+   transitions that makes a CDC demo interesting. `docs/SIMULATOR_REALISM_LEVERS.md` (Stream
+   Mode Architecture section) already specifies the fix: maintain an in-memory
+   `PendingTransition {order_id, next_state, fire_at_real_time}` queue; each tick, pop due
+   transitions, emit one state `UPDATE` + one event row per transition, and reschedule the
+   order's next transition using `simulated_delay / compression_ratio`. This is the single
+   highest-value simulator change for Phase 4 — without it, the schema-evolution exercise in
+   4d and the CDC consumer in 4c have nothing realistic to watch.
+
+5. **Retire the stale ADR-016 runtime-injection path from `stream_mode`'s hot path.**
+   `pick_customer()` / `create_new_customer()` (`generator.py:271-311`) still implement the
+   pre-ADR-018 "inject a new customer at a random per-order rate" behavior, and `main.py`'s
+   `stream_mode` still calls them. ADR-018 superseded this — customer growth is now baked into
+   pre-generated `created_at` dates, and both simulators are supposed to filter
+   `eligible = [c for c in customers if c.created_at <= sim_clock.now()]`. Replace the
+   `pick_customer` call in `stream_mode` with that filter (the sorted-`created_at` + `bisect`
+   pattern already used in `generate_historical_orders` is directly reusable). Keep
+   `create_new_customer`/`pick_customer` only if there's a concrete edge-case test that still
+   wants them — otherwise delete them; don't leave superseded logic live in the hot path.
+
+6. **Publication + replica identity for Debezium.** `CREATE PUBLICATION dbz_publication FOR
+   TABLE orders, order_items, payments;` (matching the corrected watch-list above).
+   `REPLICA IDENTITY DEFAULT` (Postgres default) is sufficient — this schema has no hard
+   `DELETE`s anywhere in `db.py`, so Debezium never needs a full before-image for a tombstone.
+   Document this reasoning in a code comment near the publication DDL rather than an ADR — it's
+   an operational note, not an architectural decision.
+
+7. **Run the existing 69-test suite against live Postgres, not just in-memory DuckDB.** Add a
+   Postgres-backed test tier (a `docker compose` Postgres fixture, or reuse the Phase 4.0
+   service) so `test_db.py` exercises the Postgres branch of every method it currently only
+   exercises against DuckDB.
+
+**Deliverable:** `python -m simulator.main --bootstrap` and `--historical 1` succeed against the
+live Postgres service. `--stream --duration 120` produces a visible trickle of discrete
+`UPDATE`s — `SELECT * FROM order_events ORDER BY event_timestamp DESC LIMIT 20` shows staggered,
+non-simultaneous timestamps, not one batch landing at once. Full test suite green against both
+DuckDB and Postgres.
+
+---
+
+#### Phase 4b — Debezium Connector + Avro/Schema Registry (ADR-024)
+
+1. Register the Postgres source connector via the Kafka Connect REST API (`POST
+   localhost:8083/connectors`): `plugin.name: pgoutput`, `slot.name`, `publication.name:
+   dbz_publication`, `table.include.list: public.orders,public.order_items,public.payments`
+   (corrected per the erratum above).
+2. `key.converter` / `value.converter`: `io.confluent.connect.avro.AvroConverter`,
+   `*.schema.registry.url` pointed at the `schema-registry` service (per-connector override is
+   redundant if already set at the worker level in 4.0, but set explicitly here for clarity).
+3. Set subject compatibility mode to `BACKWARD` for the three connector subjects via the
+   Schema Registry REST API (`PUT /config/<subject>`).
+4. Validate topics: `<server>.public.orders`, `<server>.public.order_items`,
+   `<server>.public.payments` are created once stream mode (from 4a) starts producing writes.
+5. Inspect one message per topic with `kafka-avro-console-consumer` — confirm the schema-ID
+   wire prefix and the Debezium before/after payload envelope.
 
 **Key Concepts:**
 - Debezium event structure (before/after payloads, op codes: `c` / `u` / `d`)
 - Kafka topic naming: `<server>.<schema>.<table>`
 - Avro schema definition and wire format (schema ID prefix + binary payload)
 - Schema Registry compatibility modes (`BACKWARD` / `FORWARD` / `FULL`) and what each permits
+- `pgoutput` as the native Postgres logical decoding plugin — no extension install required
+
+**Deliverable:** Three Kafka topics receiving Avro-encoded CDC events as simulator stream mode
+(from 4a) runs. `curl localhost:8081/subjects` shows three registered subjects, all `BACKWARD`.
+
+---
+
+#### Phase 4c — CDC Consumer + Snowflake MERGE
+
+1. Python consumer (`confluent-kafka` + `AvroDeserializer`) — consumer group ID and offset
+   strategy (`earliest`, so a restart replays from the last committed offset rather than
+   silently skipping) documented in code comments per the Pipeline Engineer's behavioral rules.
+2. Handle Debezium op codes `c` / `u` / `d` explicitly. This schema has no hard deletes today
+   (per the 4a replica-identity note) — the `d` path should log and no-op deliberately, not
+   silently swallow a code path that can't currently be exercised.
+3. Dead-letter topic/table for malformed or unparseable events — never silently dropped.
+4. `MERGE` into `RAW.retail.*` in Snowflake, keyed by each table's PK — idempotent, replay-safe.
+5. Run `dbt run --select fct_orders+` incrementally — confirm rows are picked up with no
+   full-refresh required.
+
+**Key Concepts:**
 - MERGE/upsert in Snowflake for CDC targets
 - Incremental model deduplication via `unique_key`
 - How the initial bulk load (Phase 2) and CDC (Phase 4) connect — offset management
 
-**Deliverable:** Simulator streaming mode running. Order status changes in Postgres appear in
-`fct_orders` after an incremental dbt run, with no full-refresh required. Schema Registry shows
-registered subjects for all three watched tables; the schema-evolution exercise demonstrates
-one accepted change and one rejected breaking change.
+**Deliverable:** Order status changes written by the simulator's stream mode (Postgres) appear
+in `fct_orders` after an incremental `dbt run`, with no full-refresh required.
+
+---
+
+#### Phase 4d — Schema Evolution Exercise
+
+1. **Accepted change:** `ALTER TABLE orders ADD COLUMN gift_wrap BOOLEAN;` in Postgres. Confirm
+   the registry accepts the new Avro schema version under `BACKWARD` compatibility (new field is
+   nullable) and the consumer from 4c keeps deserializing without a redeploy.
+2. **Rejected change:** attempt a breaking change (e.g., `ALTER TABLE orders ALTER COLUMN
+   total_amount TYPE TEXT;` or drop an existing column). Confirm the registry rejects the write
+   under `BACKWARD` compatibility.
+3. Document both outcomes — the resulting compatibility error message, and what a consumer
+   would have seen without Schema Registry in place — in `docs/runbook.md`.
+
+**Deliverable:** One accepted schema evolution and one rejected breaking change, both observed
+and documented. This is the concrete artifact that makes "schema evolution and compatibility
+contracts" a defensible interview talking point (per ADR-024's stated goal) rather than a
+name-drop.
 
 ---
 
