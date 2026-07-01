@@ -578,3 +578,72 @@ Not yet made. Captured here as an explicit candidate for a stretch phase rather 
 - Added to Phase 7 (Stretch) in SPEC.md
 - Does not affect Phases 1–6; can be attempted after Phase 6 portfolio polish is complete
 - Iceberg/Trino familiarity is a meaningful differentiator for staff/principal DE roles at companies running open lakehouses alongside or instead of cloud warehouses
+
+---
+
+### ADR-024 — Avro + Schema Registry for CDC event serialization
+**Date:** 2026-07-01
+**Status:** Active
+**Tags:** [architecture] [cdc] [infrastructure] [governance]
+
+**Context:**
+Phase 4 already introduces Kafka in KRaft mode (ADR-005) as the transport for Debezium CDC
+events out of Postgres (ADR-006). Left unconfigured, Debezium's default converter serializes
+change events as JSON-with-embedded-schema — verbose, and with no enforced contract between
+producer and consumer. A schema changing shape on the Postgres side (a column added, renamed,
+or dropped) would silently propagate to the Kafka consumer with no compatibility check.
+
+This is a narrower concern than the data-catalog/governance question closed by ADR-008
+(DataHub/OpenMetadata excluded). ADR-008 rejected those tools because they bundle a catalog,
+lineage graph, and UI on top of Elasticsearch/Neo4j — multi-GB of infrastructure for thin
+learning return on a single-pipeline project. Schema Registry is a different shape of tool: a
+single lightweight REST service backed by a Kafka topic, with no graph store or frontend, and
+it rides on Kafka infrastructure Phase 4 is standing up regardless. The learning-value/resource
+tradeoff that killed ADR-008 does not apply here.
+
+**Decision:**
+Add Confluent Schema Registry to the Phase 4 Docker Compose stack. Debezium's Postgres
+connector is configured with `key.converter` / `value.converter` set to
+`io.confluent.connect.avro.AvroConverter` (Avro instead of the default JSON converter), pointed
+at the registry. The Python CDC consumer deserializes with an Avro deserializer
+(`confluent-kafka`'s `AvroDeserializer` or `fastavro`) resolving schema IDs against the
+registry instead of `json.loads`. Compatibility mode is set to `BACKWARD` on the subjects for
+`orders`, `order_items`, and `returns` — the three tables Debezium is already configured to
+watch (SPEC.md Phase 4 step 2).
+
+Phase 4 gets one deliberate schema-evolution exercise: add a nullable column to `orders` in
+Postgres and confirm the registry accepts the new schema version under `BACKWARD`
+compatibility; then attempt a breaking change (drop or retype an existing column) and observe
+the registry reject the write. This is the concrete artifact that makes "schema evolution and
+compatibility contracts" a defensible interview talking point rather than a name-drop.
+
+**Alternatives Considered:**
+- **Karapace** (Aiven's Apache-2.0-licensed Schema Registry, API-compatible with Confluent's):
+  avoids Confluent's Community License and is marginally lighter. Confluent Schema Registry is
+  chosen instead because it's the term most job descriptions and interviewers use — the
+  license terms (free to use, restricted only from reselling it as a competing hosted service)
+  don't affect a local training project. Karapace remains a drop-in swap if licensing becomes
+  a concern later.
+- **JSON Schema** instead of Avro: also supported by Schema Registry and Debezium, more
+  human-readable, but larger on the wire and less standard for CDC pipelines specifically.
+  Avro is Debezium's most common pairing in production and in tutorials/job descriptions.
+- **Protobuf:** viable third serialization option; skipped for scope — less common in the
+  Debezium ecosystem than Avro, no added teaching value for this project.
+- **Stay on JSON, skip Schema Registry entirely:** zero new infrastructure, but forfeits the
+  entire teaching point (schema evolution, compatibility enforcement) that motivated adding
+  this in the first place — the whole reason for reconsidering data governance for this
+  project (see also ADR-008).
+
+**Consequences:**
+- New `schema-registry` service in the Phase 4 Docker Compose file — adds ~150–300MB RAM on
+  top of the ~1.5GB already budgeted for Phase 4 (Kafka + Debezium); see updated Infrastructure
+  Stack table in SPEC.md.
+- Debezium connector config (SPEC.md Phase 4 step 2) changes from the default JSON converter to
+  `AvroConverter` with `schema.registry.url` set.
+- The Python CDC consumer (SPEC.md Phase 4 step 3) needs an Avro deserializer dependency
+  (`confluent-kafka[avro]` or `fastavro`) instead of the stdlib `json` module.
+- `RAW.retail` MERGE/upsert logic in Snowflake (SPEC.md Phase 4 step 3) is unaffected — Avro
+  deserialization happens consumer-side before the MERGE, not in Snowflake.
+- Does not reopen ADR-008. A dedicated data catalog (OpenMetadata/DataHub) remains out of
+  scope for this project; this ADR covers schema-contract enforcement on the CDC stream only,
+  not lineage, glossary, or discovery tooling.
