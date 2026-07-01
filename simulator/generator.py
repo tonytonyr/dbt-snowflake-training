@@ -12,12 +12,9 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from faker import Faker
-
 from simulator.state_machine import OrderState, PaymentState
 
 logger = logging.getLogger(__name__)
-fake = Faker()
 
 # ---------------------------------------------------------------------------
 # Seasonal demand weights by month (1=Jan … 12=Dec).
@@ -266,45 +263,3 @@ def _as_utc(value: Any) -> datetime:  # noqa: ANN401
     if isinstance(value, datetime):
         return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
     return datetime.fromisoformat(str(value)).replace(tzinfo=UTC)
-
-
-def create_new_customer() -> tuple[dict[str, Any], dict[str, Any]]:
-    """Generate a new customer and address for runtime injection (ADR-016).
-
-    Returns (customer, address) — caller must INSERT both and handle
-    IntegrityError on email uniqueness with a retry.
-    """
-    address_id = f"addr_{uuid.uuid4().hex[:12]}"
-    address = {
-        "address_id": address_id,
-        "street_address": fake.street_address(),
-        "city": fake.city(),
-        "state": fake.state_abbr(),
-        "postal_code": fake.zipcode(),
-        "country": "US",
-    }
-    customer = {
-        "customer_id": f"cust_{uuid.uuid4().hex[:12]}",
-        "first_name": fake.first_name(),
-        "last_name": fake.last_name(),
-        "email": fake.email(),
-        "address_id": address_id,
-        "created_at": datetime.now(UTC).isoformat(),
-    }
-    return customer, address
-
-
-def pick_customer(
-    customers: list[dict[str, Any]],
-    new_customer_rate_max: float,
-) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    """Return (customer, address_or_None) for the next order.
-
-    Draws a new-customer rate from Uniform(0, new_customer_rate_max) per
-    order (ADR-016). Returns a fresh (customer, address) pair when a new
-    customer is selected, otherwise picks from the existing pool.
-    """
-    if random.random() < random.uniform(0, new_customer_rate_max):
-        customer, address = create_new_customer()
-        return customer, address
-    return random.choice(customers), None

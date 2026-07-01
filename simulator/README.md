@@ -43,23 +43,28 @@ python -m simulator --stream
 python -m simulator --stream --duration 300
 ```
 
-Loops continuously, inserting one order per `tick_interval` seconds. Injects new customers
-at a random rate drawn from `Uniform(0, new_customer_rate_max)` per order (see ADR-016).
+Loops continuously, inserting one order per `tick_interval` seconds. Each order's lifecycle
+drips out as discrete, spaced-out state transitions over real wall-clock time via a
+pending-transitions queue (ADR-019), scaled by `stream.compression_ratio` — not finalized
+all at once. New customers are never injected at runtime (ADR-016's injection path is
+retired); the eligible pool grows as pre-generated `created_at` dates are crossed (ADR-018).
 `--duration SECONDS` stops the loop cleanly after that many wall-clock seconds.
 
 ## Database
 
 By default the simulator uses **DuckDB** — no server required, data stored in `simulator.duckdb`.
 
-To switch to Postgres, update `config.yaml`:
+To switch to Postgres for a session, override the type via env var rather than editing
+`config.yaml` (the checked-in default stays `duckdb` for Phase 1-3 local dev):
 
-```yaml
-database:
-  type: postgres
-  # dsn is read from DATABASE_URL env var
+```bash
+export SIMULATOR_DB_TYPE=postgres
+export DATABASE_URL=postgresql://user:pass@host:5432/dbname
+python -m simulator --bootstrap
 ```
 
-Then set `DATABASE_URL=postgresql://user:pass@host:5432/dbname`.
+`bootstrap_schema()` also creates the `dbz_publication` Postgres publication (idempotent)
+that Phase 4b's Debezium connector reads from.
 
 ## Configuration
 
@@ -70,10 +75,10 @@ All tunable parameters are in `simulator/config.yaml`:
 | `database.type` | `duckdb` | `duckdb` or `postgres` |
 | `database.path` | `simulator.duckdb` | DuckDB file path |
 | `bootstrap.csv_dir` | `samples` | Directory containing seed CSVs |
-| `simulation.num_orders` | `50000` | Orders generated per `--historical` run |
-| `simulation.new_customer_rate_max` | `0.10` | Upper bound for new-customer injection rate |
+| `simulation.num_orders` | `200000` | Orders generated per `--historical` run |
 | `simulation.max_retries` | `3` | Max payment retries before terminal failure |
 | `simulation.tick_interval` | `1` | Seconds between orders in stream mode |
+| `stream.compression_ratio` | `60` | 1 real second = N simulated seconds (ADR-019) — governs how fast queued transitions fire |
 
 ## Temporal Consistency
 
@@ -121,5 +126,6 @@ Tests run against real in-memory DuckDB — no mocks, no server required.
 ## Schema
 
 See [`docs/source_schema_spec.md`](../docs/source_schema_spec.md) for full table definitions.
-Key decisions: ADR-014 (event columns), ADR-015 (address model), ADR-016 (new customer rate),
-ADR-017 (no inventory).
+Key decisions: ADR-014 (event columns), ADR-015 (address model), ADR-016 (superseded by
+ADR-018 — runtime injection retired), ADR-017 (no inventory), ADR-018 (pre-generated customer
+growth), ADR-019 (compression ratio / pending-transitions queue).

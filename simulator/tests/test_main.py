@@ -50,8 +50,7 @@ def db(tmp_path: pytest.TempPathFactory) -> Database:
 
     with patch("simulator.main.load_config", return_value={
         "bootstrap": {"csv_dir": str(tmp_path)},
-        "simulation": {"num_orders": 10, "max_retries": 3,
-                       "tick_interval": 0, "new_customer_rate_max": 0.10},
+        "simulation": {"num_orders": 10, "max_retries": 3, "tick_interval": 0},
     }):
         bootstrap_mode(database)
 
@@ -74,8 +73,7 @@ class TestBootstrapMode:
 class TestHistoricalMode:
     def test_generates_orders(self, db: Database) -> None:
         with patch("simulator.main.load_config", return_value={
-            "simulation": {"num_orders": 5, "max_retries": 3,
-                           "tick_interval": 0, "new_customer_rate_max": 0.10},
+            "simulation": {"num_orders": 5, "max_retries": 3, "tick_interval": 0},
         }):
             historical_mode(db, num_months=1)
 
@@ -85,8 +83,7 @@ class TestHistoricalMode:
 
     def test_creates_events(self, db: Database) -> None:
         with patch("simulator.main.load_config", return_value={
-            "simulation": {"num_orders": 3, "max_retries": 3,
-                           "tick_interval": 0, "new_customer_rate_max": 0.10},
+            "simulation": {"num_orders": 3, "max_retries": 3, "tick_interval": 0},
         }):
             historical_mode(db, num_months=1)
 
@@ -98,8 +95,7 @@ class TestHistoricalMode:
         empty_db = Database("duckdb", path=":memory:")
         empty_db.bootstrap_schema()
         cfg = {"simulation": {
-            "num_orders": 5, "max_retries": 3,
-            "tick_interval": 0, "new_customer_rate_max": 0.10,
+            "num_orders": 5, "max_retries": 3, "tick_interval": 0,
         }}
         with (
             patch("simulator.main.load_config", return_value=cfg),
@@ -268,10 +264,8 @@ class TestEventTimestamps:
 class TestStreamDuration:
     def test_stream_exits_after_duration(self, db: Database) -> None:
         cfg = {
-            "simulation": {
-                "num_orders": 1000, "max_retries": 3,
-                "tick_interval": 0, "new_customer_rate_max": 0.0,
-            },
+            "simulation": {"num_orders": 1000, "max_retries": 3, "tick_interval": 0},
+            "stream": {"compression_ratio": 60},
         }
         start = time.monotonic()
         with patch("simulator.main.load_config", return_value=cfg):
@@ -282,10 +276,8 @@ class TestStreamDuration:
 
     def test_stream_inserts_orders(self, db: Database) -> None:
         cfg = {
-            "simulation": {
-                "num_orders": 1000, "max_retries": 3,
-                "tick_interval": 0, "new_customer_rate_max": 0.0,
-            },
+            "simulation": {"num_orders": 1000, "max_retries": 3, "tick_interval": 0},
+            "stream": {"compression_ratio": 60},
         }
         with patch("simulator.main.load_config", return_value=cfg):
             stream_mode(db, duration_secs=0.2)
@@ -293,6 +285,25 @@ class TestStreamDuration:
         cursor = db._conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM orders")
         assert cursor.fetchone()[0] > 0
+
+    def test_stream_produces_staggered_transitions(self, db: Database) -> None:
+        """ADR-019: transitions should drip out at different times, not all at
+        once — ordering by fire time and requiring more than one distinct
+        event_timestamp for a multi-event order proves the queue is real."""
+        cfg = {
+            "simulation": {"num_orders": 1000, "max_retries": 3, "tick_interval": 0},
+            # Fast enough that at least the placed->confirmed hop (0-30 sim min)
+            # fires within the test's real-time budget.
+            "stream": {"compression_ratio": 5000},
+        }
+        with patch("simulator.main.load_config", return_value=cfg):
+            stream_mode(db, duration_secs=1.0)
+
+        cursor = db._conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM order_events")
+        assert cursor.fetchone()[0] > 0, (
+            "expected at least one queued transition to have fired"
+        )
 
 
 class TestCLI:

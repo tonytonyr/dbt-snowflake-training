@@ -6,12 +6,7 @@ from typing import Any
 
 import pytest
 
-from simulator.generator import (
-    create_new_customer,
-    generate_historical_orders,
-    generate_order,
-    pick_customer,
-)
+from simulator.generator import generate_historical_orders, generate_order
 
 
 @pytest.fixture
@@ -194,37 +189,3 @@ class TestGenerateHistoricalOrders:
         ]
         with pytest.raises(ValueError, match="No customers existed before end_date"):
             generate_historical_orders(customers, products, 5, window_start, window_end)
-
-
-class TestCreateNewCustomer:
-    def test_returns_customer_and_address(self) -> None:
-        customer, address = create_new_customer()
-        assert customer["customer_id"].startswith("cust_")
-        assert customer["address_id"] == address["address_id"]
-        assert address["country"] == "US"
-        assert "@" in customer["email"]
-
-    def test_unique_ids(self) -> None:
-        c1, a1 = create_new_customer()
-        c2, a2 = create_new_customer()
-        assert c1["customer_id"] != c2["customer_id"]
-        assert a1["address_id"] != a2["address_id"]
-
-
-class TestPickCustomer:
-    def test_returns_existing_at_zero_rate(
-        self, customers: list[dict[str, Any]]
-    ) -> None:
-        for _ in range(20):
-            customer, address = pick_customer(customers, new_customer_rate_max=0.0)
-            assert address is None
-            assert customer in customers
-
-    def test_returns_new_at_max_rate(
-        self, customers: list[dict[str, Any]]
-    ) -> None:
-        new_count = sum(
-            1 for _ in range(100)
-            if pick_customer(customers, new_customer_rate_max=1.0)[1] is not None
-        )
-        assert new_count > 0

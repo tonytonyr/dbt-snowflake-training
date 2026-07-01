@@ -1,0 +1,9 @@
+# Simulator runtime + test dependencies. Previously installed ad hoc — pinned
+# here starting Phase 4a because Postgres is now a real, running dependency
+# instead of an untested code path (SPEC.md Phase 4a item 1).
+duckdb>=1.0.0
+psycopg2-binary>=2.9.9
+pandas>=2.2.0
+faker>=24.0.0
+pytest>=8.0.0
+ruff>=0.6.0
