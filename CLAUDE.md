@@ -104,35 +104,81 @@ Snowflake Tasks schedule batch jobs (compiled dbt SQL / stored procedures) at in
 
 ## Open Items — Pick Up Next Session
 
-### Simulator work is paused — move to Phase 2
-Phase 1 simulator is considered done for now. Levers 2/3 and stream mode
-pending-transitions queue are deferred until after Phase 2 work begins.
+### Consider before Phase 4 kickoff: Stream Mode Pending-Transitions Queue (ADR-019)
+Stream mode still finalizes all lifecycle events at order creation time rather than
+dripping state changes over real wall-clock time at the configured `compression_ratio`.
+This is directly relevant to Phase 4 — the CDC pipeline's live demo depends on stream mode
+producing a realistic drip of `c`/`u`/`d` events, not everything landing at once per order.
+Worth deciding at Phase 4 kickoff whether to implement this queue first, or accept the
+current all-at-once behavior for the initial CDC pipeline build and revisit after.
 
-### Simulator Realism Levers
+### Simulator Realism Levers (still deferred, not CDC-blocking)
 See `docs/SIMULATOR_REALISM_LEVERS.md` for full spec.
 
 | Lever | Status |
 |-------|--------|
-| 1 — Customer acquisition (seasonal `created_at`) | ✅ Complete — CSV regenerated, tail-spike bug fixed |
-| 2 — Time-of-day order distribution | Deferred post-Phase 2 |
-| 3 — Product lifecycle (stars/duds, launch spikes) | Deferred post-Phase 2 |
+| 1 — Customer acquisition (seasonal `created_at`) | ✅ Complete |
+| 2 — Time-of-day order distribution | Deferred |
+| 3 — Product lifecycle (stars/duds, launch spikes) | Deferred |
 
-### Stream Mode Pending-Transitions Queue (ADR-019)
-Stream mode still finalizes all lifecycle events at order creation time. Needs a
-pending-transitions queue so CDC consumers see state changes drip over real
-wall-clock time at the configured `compression_ratio`. Deferred post-Phase 2.
+### Phase 3 residual items (not blocking Phase 4, but worth clearing)
+See the 2026-07-01 session note above for full context.
+- Confirm Phase 3d full-refresh baseline was run against prod (`dbt run --select fct_orders
+  fct_payments fct_returns --full-refresh --target prod`)
+- Confirm Phase 3e post-merge steps were run against prod (time spine table, `mf list
+  metrics`, `mf query` smoke test)
+- Snowflake Semantic Views publishing — blocked on missing `dbt_semantic_view` package;
+  revisit if/when it lands on the dbt Hub index
+- Persistent dbt docs hosting (GitHub Pages / S3 / dbt Cloud) instead of per-run artifact download
 
-### Open PRs
-All Phase 1 work is on `main` — no PRs opened yet. Before or alongside Phase 2:
-- Open PR for simulator core (state machine, db, generator, main)
-- Open PR for bootstrap data generation notebook rewrite
-- Open PR for realism lever 1 + tail-spike fix + DuckDB write perf fix
+### Before Phase 4: MetricFlow mechanics review
+User asked for a dedicated review session on dbt Semantic Layer + MetricFlow mechanics
+(semantic model/measure/metric/saved-query relationships, entity-based joins,
+metric_time vs agg_time_dimension, mf CLI workflow) before starting Phase 4. This has not
+happened yet as a standalone teaching session — do this first, or at minimum ask whether
+the user still wants it before diving into Phase 4 CDC work.
 
 ---
 
 ## Current Phase
 
 **Phase 4 — CDC Ingestion (next)**
+
+### 2026-07-01 — Phase 3 loose-ends cleanup + Phase 4 planning (ADR-024)
+
+**Closed this session:**
+- `shipped_revenue` metric added (PR #25) — second `agg_time_dimension` (`shipped_date`,
+  `expr: shipped_at`) on `sem_orders`, alongside the existing `order_date`. Delivered-order
+  revenue anchored to ship date instead of order date, for fulfilment-timing questions
+  distinct from order-timing questions. Validated with `dbt parse` (no error). Lesson doc
+  (`lessons/phase-3/phase-3e-semantic-layer.md`, local-only per `.gitignore`) documents the
+  pattern and a gotcha: metrics with different `agg_time_dimension`s can be queried together,
+  but only by grouping on generic `metric_time` — grouping by a *named* dimension
+  (`order__order_date`) fails once metrics with mixed `agg_time_dimension`s are in the same
+  request.
+- **ADR-024 added** (PR #24): Avro serialization + Schema Registry for Phase 4 CDC events.
+  Rides on Kafka infra Phase 4 already scopes — not a reopening of ADR-008 (DataHub/OpenMetadata
+  exclusion), which was about a full data catalog, not schema-contract enforcement. `SPEC.md`
+  Phase 4 section updated: Debezium configured with `AvroConverter`, `BACKWARD` compatibility
+  on the three watched subjects, and a deliberate schema-evolution exercise (accept a nullable
+  column add, reject a breaking change) added as a Phase 4 deliverable.
+- Repo housekeeping: merged PR #24 and #25 (both green CI, squash-merged, branches
+  auto-deleted). Also deleted 3 stale local/remote branches left over from already-merged,
+  squash-merged PRs (#15, #22, #23): `chore/phase-3e-docs`, `feature/phase-3a-intermediate-models`,
+  `feature/phase-3e-semantic-layer`. These showed as "not merged" under `git branch --merged`
+  only because squash merges rewrite the commit SHA — verified via `gh pr list --search
+  "head:<branch>"` that each had a merged PR before deleting. Added a `.gitignore` rule for
+  `retail_analytics/order_v_ship.csv` (ad-hoc `mf` query scratch output, not a deliverable).
+
+**Still open, not blocking Phase 4 start — see "Open Items" below:**
+- Phase 3d full-refresh baseline never confirmed as run against prod
+- Phase 3e post-merge steps (time spine, `mf list metrics`, smoke test) never confirmed as run against prod
+- Snowflake Semantic Views publishing (ADR-021 item 5) — blocked, package not on dbt Hub
+- Persistent dbt docs hosting — flagged since Phase 3c, never picked up
+
+**No new ADRs beyond ADR-024.**
+
+---
 
 Phase 3e (Semantic Layer) is complete and merged (PR #22).
 
