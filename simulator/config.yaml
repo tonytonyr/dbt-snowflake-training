@@ -1,7 +1,9 @@
 # Simulator Configuration
 
 database:
-  type: duckdb            # duckdb | postgres
+  type: duckdb            # duckdb | postgres — checked-in default stays duckdb for
+                          # Phase 1-3 local dev; override with SIMULATOR_DB_TYPE=postgres
+                          # for Phase 4 CDC sessions (see SPEC.md Phase 4a)
   path: simulator.duckdb  # DuckDB file path (relative to working directory)
   # dsn: ""               # Postgres: set DATABASE_URL env var instead
 
@@ -41,4 +43,8 @@ simulation:
   max_retries: 3
   tick_interval: 1
   num_orders: 200000
-  new_customer_rate_max: 0.10
+
+stream:
+  # ADR-019: 1 real second = 60 simulated seconds. Governs how fast queued
+  # lifecycle transitions fire in stream mode's pending-transitions queue.
+  compression_ratio: 60

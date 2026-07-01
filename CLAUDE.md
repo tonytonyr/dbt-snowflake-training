@@ -193,6 +193,53 @@ active and unchanged.
 **Next:** Begin Phase 4.0 (`feature/phase-4-0-infra-bringup`) — Docker Compose service bring-up
 and the 6-point validation checklist, before touching Phase 4a simulator work.
 
+### 2026-07-01 — Phase 4a executed and validated live against Postgres (same session)
+
+Phase 4.0 PR (#27) merged and CI-green. Immediately followed with Phase 4a — all four gaps
+flagged in the prior session's simulator review are now fixed, not just documented, and
+validated against the live Postgres container rather than only unit-tested:
+
+1. **`SIMULATOR_DB_TYPE` env override added to `db.py`'s `get_database()`** — points the
+   simulator at Postgres for a session without changing `config.yaml`'s checked-in `duckdb`
+   default (Phase 1-3 local dev unaffected).
+2. **`simulator/requirements.txt` created** (first time) — `duckdb`, `psycopg2-binary`,
+   `pandas`, `faker`, `pytest`, `ruff`, pinned now that Postgres is a real dependency.
+3. **`_get_conn` rollback bug fixed** — Postgres branch now does `except Exception:
+   conn.rollback(); raise` before returning the connection to the pool. Proven with a new
+   regression test (`test_db_postgres.py::TestPostgresConnRollback`), not just patched.
+4. **ADR-019 pending-transitions queue implemented in `stream_mode`** — the highest-priority
+   item. `PendingTransition` + a `heapq`-backed queue in `simulator/main.py` replace the old
+   synchronous `simulate_order_lifecycle()` call. Validated with a real 3-minute stream run
+   against Postgres: all 6 state-machine edges (placed→confirmed/cancelled,
+   confirmed→shipped/cancelled, shipped→delivered/returned, delivered→returned) fired at
+   staggered real timestamps consistent with `_ORDER_DELAY` ÷ `compression_ratio: 60` — full
+   query output in `lessons/phase-4/phase-4a-training.md`.
+5. **Stale ADR-016 code retired** — `create_new_customer()`/`pick_customer()` deleted from
+   `generator.py` (with the now-unused `Faker` import), `insert_customer_with_address()`
+   deleted from `db.py` (its only caller). `stream_mode` now filters eligible customers via
+   `created_at <= sim_clock.now()`, reusing the `bisect` pattern already in
+   `generate_historical_orders`.
+6. **`dbz_publication` created idempotently in `bootstrap_schema()`** for Postgres, watching
+   `orders`, `order_items`, `payments` (the corrected list). Confirmed via
+   `pg_publication_tables` against the live container.
+7. **New Postgres integration test tier** (`simulator/tests/test_db_postgres.py`) — creates a
+   dedicated `retail_test` database so it never touches the demo dataset in `retail`; skips
+   cleanly (not fails) when no Postgres is reachable, confirmed both ways.
+
+**Full suite: 70/70 passing** (66 DuckDB + 4 new Postgres-backed), `ruff check` clean on every
+file touched. Bootstrap against live Postgres loaded 200K addresses / 340,452 customers / 25K
+products in ~3.5 minutes (row-by-row `execute_values` — no DuckDB-style native CSV loader for
+Postgres; acceptable for a one-time bootstrap, not a bottleneck for this project).
+
+**No new ADRs** — all changes were implementing/fixing what ADR-016, ADR-018, and ADR-019
+already specified, plus one latent bug fix. ADR-005, ADR-006, ADR-016, ADR-018, ADR-019,
+ADR-024 all still active and unchanged (ADR-016 remains "Active" in `DECISIONS.md` per the
+"decisions are permanent" convention even though its runtime-injection mechanism is now fully
+superseded by ADR-018 in code, not just in the decision log).
+
+**Next:** Phase 4b — register the Debezium connector against `dbz_publication`, with Avro
+converters already wired up in Phase 4.0's Kafka Connect image.
+
 ### 2026-07-01 — Phase 4.0 executed and validated live (same session)
 
 Wrote `lessons/phase-4/phase-4-plan.md` (overview across all 5 sub-phases) and

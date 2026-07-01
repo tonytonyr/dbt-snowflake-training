@@ -149,6 +149,14 @@ class Database:
             conn = self._pool.getconn()
             try:
                 yield conn
+            except Exception:
+                # Without this, a failed statement leaves the connection in an
+                # aborted-transaction state, and it gets handed to the next
+                # borrower still broken — every statement on it fails with
+                # "current transaction is aborted" until something rolls it back.
+                # Invisible against DuckDB (single connection, no pool).
+                conn.rollback()
+                raise
             finally:
                 self._pool.putconn(conn)
 
@@ -228,6 +236,35 @@ class Database:
             finally:
                 cursor.close()
         logger.info("Schema bootstrapped successfully")
+        if self._db_type == "postgres":
+            self._ensure_publication()
+
+    def _ensure_publication(self, name: str = "dbz_publication") -> None:
+        """Create the Debezium publication if it doesn't already exist.
+
+        Postgres has no `CREATE PUBLICATION IF NOT EXISTS` — existence is checked
+        against pg_publication first. Watches orders, order_items, payments: the
+        three tables Phase 4b's Debezium connector subscribes to (SPEC.md Phase 4
+        erratum — no `returns` table exists in this schema). REPLICA IDENTITY
+        DEFAULT (the Postgres default) is sufficient here — this schema has no
+        hard DELETEs anywhere in this module, so Debezium never needs a full
+        before-image for a tombstone.
+        """
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    "SELECT 1 FROM pg_publication WHERE pubname = %s", (name,)
+                )
+                if cursor.fetchone() is None:
+                    cursor.execute(
+                        f"CREATE PUBLICATION {name} FOR TABLE "
+                        "orders, order_items, payments"
+                    )
+                    logger.info("Created publication %s", name)
+                conn.commit()
+            finally:
+                cursor.close()
 
     # ------------------------------------------------------------------
     # Seeding
@@ -290,39 +327,6 @@ class Database:
             conn.commit()
         finally:
             cursor.close()
-
-    def insert_customer_with_address(
-        self,
-        customer: dict[str, Any],
-        address: dict[str, Any],
-    ) -> None:
-        """Insert a new customer and their address atomically."""
-        with self._get_conn() as conn:
-            cursor = conn.cursor()
-            try:
-                self._bulk_insert(
-                    cursor, "addresses",
-                    ["address_id", "street_address", "city", "state",
-                     "postal_code", "country"],
-                    [(
-                        address["address_id"], address["street_address"],
-                        address["city"], address["state"],
-                        address["postal_code"], address["country"],
-                    )],
-                )
-                self._bulk_insert(
-                    cursor, "customers",
-                    ["customer_id", "first_name", "last_name",
-                     "email", "address_id", "created_at"],
-                    [(
-                        customer["customer_id"], customer["first_name"],
-                        customer["last_name"], customer["email"],
-                        customer["address_id"], customer["created_at"],
-                    )],
-                )
-                conn.commit()
-            finally:
-                cursor.close()
 
     # ------------------------------------------------------------------
     # Reads
@@ -472,6 +476,63 @@ class Database:
                      "event_timestamp", "failure_reason", "retry_attempt"],
                     payment_events,
                 )
+                conn.commit()
+            finally:
+                cursor.close()
+
+    def apply_order_transition(
+        self,
+        order_id: str,
+        order_state: str,
+        is_stuck: bool,
+        stuck_reason: str | None,
+        updated_at: datetime,
+        order_event: tuple[Any, ...] | None,
+        payment_id: str | None = None,
+        payment_state: str | None = None,
+        retry_count: int | None = None,
+        payment_event: tuple[Any, ...] | None = None,
+    ) -> None:
+        """Apply one lifecycle step — an order state change and, usually, a paired
+        payment state change — plus its event row(s), as a single small transaction.
+
+        This is the ADR-019 "drip" write: stream_mode calls this once per queued
+        transition, spaced out over real wall-clock time, in contrast to
+        finalize_order's all-at-once write of an order's entire remaining lifecycle
+        (still used by the historical/bulk path).
+        """
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    self._adapt(
+                        "UPDATE orders SET order_state = %s, is_stuck = %s,"
+                        " stuck_reason = %s, updated_at = %s WHERE order_id = %s"
+                    ),
+                    (order_state, is_stuck, stuck_reason, updated_at, order_id),
+                )
+                if order_event is not None:
+                    self._insert_batch(
+                        cursor, "order_events",
+                        ["event_id", "order_id", "previous_state", "new_state",
+                         "event_timestamp", "reason", "retry_count"],
+                        [order_event],
+                    )
+                if payment_id is not None:
+                    cursor.execute(
+                        self._adapt(
+                            "UPDATE payments SET payment_state = %s,"
+                            " retry_count = %s WHERE payment_id = %s"
+                        ),
+                        (payment_state, retry_count, payment_id),
+                    )
+                if payment_event is not None:
+                    self._insert_batch(
+                        cursor, "payment_events",
+                        ["event_id", "payment_id", "previous_state", "new_state",
+                         "event_timestamp", "failure_reason", "retry_attempt"],
+                        [payment_event],
+                    )
                 conn.commit()
             finally:
                 cursor.close()
@@ -630,7 +691,10 @@ def get_database(config: dict[str, Any] | None = None) -> Database:
     if config is None:
         config = load_config()
     db_cfg = config.get("database", {})
-    db_type = db_cfg.get("type", "duckdb")
+    # SIMULATOR_DB_TYPE lets an operator point at Postgres for a Phase 4 CDC
+    # session without editing the checked-in config.yaml default (which stays
+    # duckdb — Phase 1-3 local dev is unaffected; see SPEC.md Phase 4a).
+    db_type = os.environ.get("SIMULATOR_DB_TYPE", db_cfg.get("type", "duckdb"))
     if db_type == "duckdb":
         return Database("duckdb", path=db_cfg.get("path", "simulator.duckdb"))
     dsn = db_cfg.get("dsn") or os.environ.get("DATABASE_URL", "")
