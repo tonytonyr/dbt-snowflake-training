@@ -820,16 +820,37 @@ DuckDB and Postgres.
    silently swallow a code path that can't currently be exercised.
 3. Dead-letter topic/table for malformed or unparseable events — never silently dropped.
 4. `MERGE` into `RAW.retail.*` in Snowflake, keyed by each table's PK — idempotent, replay-safe.
+   Every MERGE stamps a `_cdc_loaded_at` (`CURRENT_TIMESTAMP()`) column — needed by the
+   reconciliation check in step 6, not optional bookkeeping.
 5. Run `dbt run --select fct_orders+` incrementally — confirm rows are picked up with no
    full-refresh required.
+6. **CDC reconciliation via the Postgres event log.** `order_events`/`payment_events` are
+   deliberately excluded from `dbz_publication` (4a) — they never flow through Debezium/Kafka/
+   this consumer, which makes them an independent oracle rather than a check that could pass
+   even if the pipeline drops the same events every time. Two checks, both needing Postgres +
+   Snowflake connections in the same process/session:
+   - **Correctness:** `SELECT DISTINCT ON (order_id) order_id, new_state, event_timestamp FROM
+     order_events ORDER BY order_id, event_timestamp DESC` (Postgres) — the last known state per
+     order — diffed against `RAW.retail.orders.order_state` (Snowflake) for the same `order_id`.
+     A mismatch is either lag or a dropped message; step below disambiguates.
+   - **Lag:** `snowflake._cdc_loaded_at - postgres.order_events.event_timestamp`, per order —
+     real end-to-end pipeline latency, not a guess.
+   - Delivered as **both** a reusable script (`scripts/validate_cdc_reconciliation.py`) and a
+     notebook (`notebooks/02_cdc_reconciliation.ipynb`, matching the
+     `01_simulator_data_quality.ipynb` convention) that imports the script's query logic for
+     visualization — one source of truth for the queries, two ways to run them.
 
 **Key Concepts:**
 - MERGE/upsert in Snowflake for CDC targets
 - Incremental model deduplication via `unique_key`
 - How the initial bulk load (Phase 2) and CDC (Phase 4) connect — offset management
+- Validating a pipeline against data that never passed through it, vs. re-checking a system
+  against itself
 
 **Deliverable:** Order status changes written by the simulator's stream mode (Postgres) appear
 in `fct_orders` after an incremental `dbt run`, with no full-refresh required.
+`validate_cdc_reconciliation.py` (and the notebook) show zero state mismatches and a lag
+distribution consistent with `compression_ratio`-scaled transition delays.
 
 ---
 
@@ -841,7 +862,10 @@ in `fct_orders` after an incremental `dbt run`, with no full-refresh required.
 2. **Rejected change:** attempt a breaking change (e.g., `ALTER TABLE orders ALTER COLUMN
    total_amount TYPE TEXT;` or drop an existing column). Confirm the registry rejects the write
    under `BACKWARD` compatibility.
-3. Document both outcomes — the resulting compatibility error message, and what a consumer
+3. Re-run `validate_cdc_reconciliation.py` after the accepted change — proves the pipeline is
+   still correctly landing state (not just that the registry accepted the schema) with the new
+   column flowing through end to end.
+4. Document all outcomes — the resulting compatibility error message, and what a consumer
    would have seen without Schema Registry in place — in `docs/runbook.md`.
 
 **Deliverable:** One accepted schema evolution and one rejected breaking change, both observed
