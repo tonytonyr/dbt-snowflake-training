@@ -104,13 +104,12 @@ Snowflake Tasks schedule batch jobs (compiled dbt SQL / stored procedures) at in
 
 ## Open Items — Pick Up Next Session
 
-### Consider before Phase 4 kickoff: Stream Mode Pending-Transitions Queue (ADR-019)
+### Decided — Stream Mode Pending-Transitions Queue is Phase 4a work (ADR-019)
 Stream mode still finalizes all lifecycle events at order creation time rather than
 dripping state changes over real wall-clock time at the configured `compression_ratio`.
-This is directly relevant to Phase 4 — the CDC pipeline's live demo depends on stream mode
-producing a realistic drip of `c`/`u`/`d` events, not everything landing at once per order.
-Worth deciding at Phase 4 kickoff whether to implement this queue first, or accept the
-current all-at-once behavior for the initial CDC pipeline build and revisit after.
+No longer an open question — scoped as item 4 of Phase 4a in `SPEC.md` (see 2026-07-01
+session note above). Implement before Phase 4b/4c; the CDC consumer and schema-evolution
+exercise both depend on a realistic drip of discrete `UPDATE`s to be interesting.
 
 ### Simulator Realism Levers (still deferred, not CDC-blocking)
 See `docs/SIMULATOR_REALISM_LEVERS.md` for full spec.
@@ -143,6 +142,97 @@ the user still wants it before diving into Phase 4 CDC work.
 ## Current Phase
 
 **Phase 4 — CDC Ingestion (next)**
+
+### 2026-07-01 — Phase 4 lesson plan authored (SPEC.md rewrite)
+
+**No code changes this session — planning only.** `SPEC.md`'s Phase 4 section was rewritten
+from a single 7-step block into five sub-phases (mirroring the Phase 2a/2b and Phase 3a–3e
+lettering pattern), each its own branch:
+- **4.0 — Infrastructure Bring-Up & Validation** (new — the "0 section" gate): stands up
+  `postgres`, `kafka` (KRaft), `schema-registry`, `connect` (Debezium) in Docker Compose and
+  requires 6 explicit health checks (container health, `wal_level=logical`, Kafka broker
+  reachability, Schema Registry `/subjects`, Connect `/connector-plugins`, `.env.example`
+  updated) to pass **before** any connector or consumer code is written.
+- **4a — Simulator → Postgres migration + realism fixes** (Platform Engineer)
+- **4b — Debezium connector + Avro/Schema Registry** (Platform Engineer, ADR-024)
+- **4c — CDC consumer + Snowflake MERGE** (Pipeline Engineer)
+- **4d — Schema evolution exercise** (Pipeline Engineer)
+
+**Simulator review found four concrete gaps, now scoped as Phase 4a work items** (this is the
+"revisit the simulator" ask — assessed, not yet implemented):
+1. Postgres has been a code path in `simulator/db.py` since Phase 1 but has **never been
+   exercised against a real Postgres server** — no test in `simulator/tests/` targets it, and
+   there's no `simulator/requirements.txt` pinning `psycopg2`.
+2. **Latent bug:** `db.py`'s Postgres `_get_conn` (`db.py:144-153`) returns a connection to the
+   pool on exception with no `conn.rollback()` — would poison the pooled connection for the next
+   borrower the first time a real error occurs (e.g., the email-uniqueness collision
+   `stream_mode` already anticipates). Invisible against DuckDB (no pool); needs a fix before
+   Postgres is load-bearing.
+3. **ADR-019's pending-transitions queue is still not implemented.** `stream_mode` still calls
+   `simulate_order_lifecycle()` synchronously right after `insert_order()` — the full lifecycle
+   lands in one transaction instantly, not the realistic drip of spaced-out `UPDATE`s that makes
+   the Phase 4 CDC demo (and the 4d schema-evolution exercise) meaningful. This was flagged as
+   an open item after the 2026-06-04 session and never picked up — now it's the single
+   highest-priority Phase 4a item.
+4. **Stale ADR-016 code still live:** `pick_customer()`/`create_new_customer()` runtime
+   injection (superseded by ADR-018's pre-generated `created_at` approach) is still called from
+   `stream_mode`'s hot path. Needs to be replaced with the `created_at <= sim_clock.now()` filter
+   ADR-018/019 already specify, or deleted if unused elsewhere.
+
+**Erratum caught and corrected (not an ADR reopening):** ADR-024's decision text and the
+original SPEC.md Phase 4 step 2 both named a `returns` table for Debezium to watch — no such
+table exists in the schema (returns are `orders.order_state = 'returned'` + `order_events`
+rows). Corrected watch-list going forward: `orders`, `order_items`, `payments`. ADR-024 itself
+is left untouched per the "decisions are permanent" convention — this is flagged as a factual
+correction in SPEC.md, not a superseding decision.
+
+**No new ADRs this session** — sub-phase branch structure and the "returns" fix are execution
+planning, not architectural decisions. ADR-005, ADR-006, ADR-018, ADR-019, ADR-024 all still
+active and unchanged.
+
+**Next:** Begin Phase 4.0 (`feature/phase-4-0-infra-bringup`) — Docker Compose service bring-up
+and the 6-point validation checklist, before touching Phase 4a simulator work.
+
+### 2026-07-01 — Phase 4.0 executed and validated live (same session)
+
+Wrote `lessons/phase-4/phase-4-plan.md` (overview across all 5 sub-phases) and
+`lessons/phase-4/phase-4-0-training.md` (fully fleshed-out 4.0 training doc), then actually
+built and ran the stack against a live Docker Desktop instance rather than writing it from
+memory — two real failures found and fixed in the process:
+
+1. **Debezium 3.x is Java-17-only; `confluentinc/cp-kafka-connect-base:7.6.1` ships Java 11.**
+   Pinning `debezium/debezium-connector-postgresql:latest` resolved to `3.2.6-2` and failed at
+   Connect startup with `UnsupportedClassVersionError`. Fixed by querying Confluent Hub's
+   version API and pinning `2.5.4-2` — the last Java-11-compatible line.
+2. **Connect container OOM-killed at `mem_limit: 768m`** (`docker inspect` confirmed
+   `OOMKilled=true`, exit 137). `cp-kafka-connect-base` scans ~15 bundled Confluent component
+   classpaths at startup, not just the two this image adds — the scan needs more headroom than
+   the JVM heap alone. Fixed by raising the limit to `1536m` (heap stayed at `-Xmx768m`).
+
+**Real files created (this is the first Docker Compose stack in the project):**
+- `docker-compose.yml` — `postgres` (16, `wal_level=logical`), `kafka` (KRaft, `cp-kafka:7.6.1`,
+  no ZooKeeper per ADR-005), `schema-registry` (`cp-schema-registry:7.6.1`), `connect` (custom
+  build)
+- `docker/kafka-connect-avro/Dockerfile` — `cp-kafka-connect-base:7.6.1` +
+  `confluent-hub install` for the Debezium Postgres connector and Confluent's Avro converter.
+  Debezium's own image doesn't bundle Confluent's Avro converter (Confluent-distributed, not
+  part of the Debezium project) — starting from Confluent's Connect base (which ships the
+  `confluent-hub` CLI) and installing both components into it avoided guessing raw Maven jar
+  coordinates.
+- `.env.example` — Postgres credentials + `KAFKA_CLUSTER_ID` placeholders (first `.env.example`
+  in this repo — none existed before, a pre-existing small gap not otherwise fixed this session)
+
+**All 6 validation checks passed against the live stack** (full output in the training doc):
+container health, `wal_level=logical`, Kafka broker reachability, Schema Registry `/subjects`
+returning `[]`, Connect `/connector-plugins` listing
+`io.debezium.connector.postgresql.PostgresConnector`, no secrets committed.
+
+**Stack was left running** at session end (`docker compose ps` shows all 4 healthy) so Phase 4a
+can start immediately next session without re-running bring-up. Nothing has been committed yet.
+
+**No new ADRs** — the Java-version pin and memory limit are implementation facts discovered by
+testing, not architectural decisions; both are documented as code comments in
+`docker-compose.yml`/`Dockerfile` and in the training doc's "What Actually Happened" section.
 
 ### 2026-07-01 — Phase 3 loose-ends cleanup + Phase 4 planning (ADR-024)
 
