@@ -23,6 +23,12 @@ semantic_models:
           time_granularity: day
         expr: order_date
 
+      - name: shipped_date
+        type: time
+        type_params:
+          time_granularity: day
+        expr: shipped_at
+
       - name: order_state
         type: categorical
         expr: order_state
@@ -83,3 +89,11 @@ semantic_models:
         agg: sum
         expr: "CASE WHEN is_cancelled THEN 1 ELSE 0 END"
         agg_time_dimension: order_date
+
+      - name: shipped_revenue
+        description: >
+          Sum of total_amount for delivered orders, anchored to shipped_at.
+          Only includes orders in delivered state — excludes in-transit and returned.
+        agg: sum
+        expr: "CASE WHEN order_state = 'delivered' THEN total_amount END"
+        agg_time_dimension: shipped_date

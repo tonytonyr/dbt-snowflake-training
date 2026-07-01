@@ -55,6 +55,17 @@ metrics:
       measure:
         name: revenue
 
+  - name: shipped_revenue
+    label: Shipped Revenue
+    description: >
+      Total revenue for orders that have shipped, grouped by ship date.
+      Use this instead of revenue when you care about fulfilment timing
+      rather than when the order was placed.
+    type: simple
+    type_params:
+      measure:
+        name: shipped_revenue
+
   - name: revenue_wow
     label: Revenue Week-over-Week Growth %
     description: >
