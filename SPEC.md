@@ -14,7 +14,7 @@ A self-contained learning project to close skill gaps in **dbt** and **Snowflake
 | 2 | Snowflake fundamentals: virtual warehouses, RBAC, database/schema design, query performance |
 | 3 | dbt quality patterns: schema tests, custom tests, snapshots, incremental models, macros, docs |
 | 4 | dbt Semantic Layer: MetricFlow semantic models, metric definitions, time spine, saved queries; Snowflake Semantic Views integration |
-| 5 | CDC from a Postgres operational database into Snowflake via Kafka + Debezium |
+| 5 | CDC from a Postgres operational database into Snowflake via Kafka + Debezium, with Avro serialization and Schema Registry-enforced schema evolution |
 | 6 | Airflow orchestration of the full pipeline using Astronomer Cosmos for dbt integration |
 | 7 | CI/CD with GitHub Actions — SQL linting, dbt slim CI on PR, full build on merge |
 | 8 | GitHub best practices — branching strategy, PRs, commit conventions, branch protection |
@@ -88,7 +88,10 @@ order_events                 payment_events
 │  └── Streaming mode    ──►  Postgres 16  (live event drip)      │
 │                                  │                              │
 │                          Debezium + Kafka (KRaft)               │
-│                          CDC events: c / u / d                  │
+│                          CDC events: c / u / d, Avro-encoded    │
+│                                  │                              │
+│                          Schema Registry                        │
+│                          (compatibility: BACKWARD)               │
 └──────────────────────────────────┬──────────────────────────────┘
                                    │
                     ┌──────────────▼──────────────┐
@@ -138,11 +141,12 @@ order_events                 payment_events
 | Snowflake Semantic Views | Native Snowflake | Phase 3d | (external) |
 | Kafka | Kafka 3.x (KRaft — no ZooKeeper) | Phase 4 | ~512 MB |
 | CDC | Debezium Connect | Phase 4 | ~512 MB |
+| Schema Registry | Confluent Schema Registry | Phase 4 | ~200-300 MB |
 | Airflow | Astro Runtime + Cosmos | Phase 4+ | ~2-3 GB |
 | **Phase 0-1 total** | | | **~128 MB** |
 | **Phase 2-3 total** | | | **~384 MB** |
-| **Phase 4 total** | | | **~1.5 GB** |
-| **Phase 4+ (Airflow) total** | | | **~4-4.5 GB** |
+| **Phase 4 total** | | | **~1.7-1.8 GB** |
+| **Phase 4+ (Airflow) total** | | | **~4.2-4.8 GB** |
 
 **Database strategy (ADR-006 / ADR-020):**
 - DuckDB is the default for Phase 1–3 local development — no server required
@@ -633,24 +637,38 @@ The `dbt_semantic_view` package (Snowflake Labs, GA March 2026) publishes dbt me
 
 ### Phase 4 — CDC Ingestion (Days 13-15, ~8 hours)
 
-**Goal:** Postgres → Debezium → Kafka → Snowflake CDC pipeline live. The simulator's streaming mode drives continuous change events through the full stack.
+**Goal:** Postgres → Debezium → Kafka → Snowflake CDC pipeline live, with Avro-encoded events
+and Schema Registry-enforced compatibility (ADR-024). The simulator's streaming mode drives
+continuous change events through the full stack.
 
 Branch: `feature/phase-4-cdc-pipeline`
 
-1. Add Kafka (KRaft) + Debezium Connect to Docker Compose
-2. Configure Debezium connector on `orders`, `order_items`, `returns`
-3. Python consumer reads CDC events from Kafka, upserts to `RAW.retail` in Snowflake via MERGE
-4. Start simulator in streaming mode — watch events flow end-to-end
-5. Run `dbt run --select fct_orders+` incrementally — confirm rows picked up
+1. Add Kafka (KRaft) + Debezium Connect + Schema Registry to Docker Compose
+2. Configure Debezium connector on `orders`, `order_items`, `returns`; set `key.converter` /
+   `value.converter` to `io.confluent.connect.avro.AvroConverter` pointed at the registry
+3. Set subject compatibility mode to `BACKWARD` for the three connector subjects
+4. Python consumer reads CDC events from Kafka, deserializes Avro against the registry
+   (schema ID → resolved schema), upserts to `RAW.retail` in Snowflake via MERGE
+5. Start simulator in streaming mode — watch events flow end-to-end
+6. Run `dbt run --select fct_orders+` incrementally — confirm rows picked up
+7. **Schema evolution exercise:** add a nullable column to `orders` in Postgres, confirm the
+   registry accepts the new schema version and the consumer keeps deserializing without
+   redeploying. Then attempt a breaking change (drop/retype an existing column) and confirm
+   the registry rejects the write under `BACKWARD` compatibility.
 
 **Key Concepts:**
 - Debezium event structure (before/after payloads, op codes: `c` / `u` / `d`)
 - Kafka topic naming: `<server>.<schema>.<table>`
+- Avro schema definition and wire format (schema ID prefix + binary payload)
+- Schema Registry compatibility modes (`BACKWARD` / `FORWARD` / `FULL`) and what each permits
 - MERGE/upsert in Snowflake for CDC targets
 - Incremental model deduplication via `unique_key`
 - How the initial bulk load (Phase 2) and CDC (Phase 4) connect — offset management
 
-**Deliverable:** Simulator streaming mode running. Order status changes in Postgres appear in `fct_orders` after an incremental dbt run, with no full-refresh required.
+**Deliverable:** Simulator streaming mode running. Order status changes in Postgres appear in
+`fct_orders` after an incremental dbt run, with no full-refresh required. Schema Registry shows
+registered subjects for all three watched tables; the schema-evolution exercise demonstrates
+one accepted change and one rejected breaking change.
 
 ---
 
@@ -819,7 +837,7 @@ dev:
 
 ## Interview Narrative (Target)
 
-> "I built an end-to-end modern data stack for retail e-commerce fulfillment, starting from first principles. The source is a Python event simulator I wrote — it models the order lifecycle as a state machine and can run in accelerated mode to generate a year of history in minutes, or in streaming mode to produce a live event drip. CDC via Debezium and Kafka streams those changes into Snowflake. I built 20 dbt models across staging, intermediate, and marts — SCD Type 2 snapshots, incremental fact tables, custom data quality tests — and a semantic layer on top using MetricFlow: six business metrics defined once in YAML, queryable via the dbt CLI or published as native Snowflake Semantic Views so any SQL client can consume them without re-implementing the logic. Airflow with Astronomer Cosmos orchestrates it at model-level granularity. GitHub Actions runs dbt slim CI on every PR. The whole stack runs in Docker."
+> "I built an end-to-end modern data stack for retail e-commerce fulfillment, starting from first principles. The source is a Python event simulator I wrote — it models the order lifecycle as a state machine and can run in accelerated mode to generate a year of history in minutes, or in streaming mode to produce a live event drip. CDC via Debezium and Kafka streams those changes into Snowflake, with events Avro-encoded and validated against a Schema Registry so schema changes on the source are caught at write time instead of breaking consumers downstream. I built 20 dbt models across staging, intermediate, and marts — SCD Type 2 snapshots, incremental fact tables, custom data quality tests — and a semantic layer on top using MetricFlow: six business metrics defined once in YAML, queryable via the dbt CLI or published as native Snowflake Semantic Views so any SQL client can consume them without re-implementing the logic. Airflow with Astronomer Cosmos orchestrates it at model-level granularity. GitHub Actions runs dbt slim CI on every PR. The whole stack runs in Docker."
 
 ---
 

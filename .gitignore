@@ -54,6 +54,9 @@ samples/*.sql
 # Snowflake export files (generated from simulator, loaded via SnowSQL — not version-controlled)
 exports/
 
+# Ad-hoc mf/dbt query scratch output (not a project deliverable)
+retail_analytics/order_v_ship.csv
+
 # Node (OpenCode deps)
 node_modules/
 
