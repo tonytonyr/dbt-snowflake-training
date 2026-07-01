@@ -240,6 +240,48 @@ superseded by ADR-018 in code, not just in the decision log).
 **Next:** Phase 4b — register the Debezium connector against `dbz_publication`, with Avro
 converters already wired up in Phase 4.0's Kafka Connect image.
 
+### 2026-07-01 — Phase 4b executed and validated live, plus a real CDC correctness bug (same session)
+
+Registered the Debezium connector and validated the full CDC flow live — including a
+correctness bug in Phase 4a's reasoning that only surfaced once real messages were inspected,
+plus a "watch the flow without Snowflake" tool the user specifically asked for before moving to
+the Phase 4c Snowflake consumer:
+
+1. **Connector registered** (`docker/connectors/retail-postgres-source.json` +
+   `scripts/register_debezium_connector.py`, which substitutes `${VAR}` placeholders from `.env`
+   so no credentials are committed). `publication.autocreate.mode: disabled` — fail loud if the
+   `dbz_publication` from 4a is ever missing, don't autocreate a mismatched one.
+2. **Debezium 2.5.x/3.x config drift caught immediately:** `snapshot.mode: no_data` (the 3.x
+   name) failed registration with a config-validation error; this project pinned Debezium 2.5.x
+   in Phase 4.0 for Java 11 compatibility, and 2.5.x calls the same setting `never`.
+3. **Three topics + six subjects confirmed live**, `BACKWARD` set explicitly on all three value
+   subjects. One message per topic inspected — real Debezium envelope (before/after/source/op)
+   captured in `lessons/phase-4/phase-4b-training.md`.
+4. **Real correctness bug found and fixed:** every `UPDATE`'s `before` image was `null`.
+   Phase 4a's `_ensure_publication` reasoning ("REPLICA IDENTITY DEFAULT is sufficient — no hard
+   deletes") only considered the delete/tombstone case; it missed that `DEFAULT` independently
+   means Postgres never captures the old row on `UPDATE` either, regardless of deletes. Fixed by
+   switching `orders`/`order_items`/`payments` to `REPLICA IDENTITY FULL`, folded into
+   `_ensure_publication` itself (idempotent, applies on every future bootstrap) rather than left
+   as a one-off manual fix on the running container.
+5. **`scripts/cdc_tail.py` built** — the user asked for a way to see the CDC flow without
+   hooking up Snowflake yet. Standalone Avro consumer, pretty-prints CREATE/UPDATE/DELETE with
+   field-level diffs. Found and fixed two bugs in the tool itself while validating it live:
+   stdout buffering (fixed with `line_buffering=True` — a real issue for a tool meant to be
+   piped/redirected, not just a test artifact) and a stale-consumer-group hang on rapid restart
+   under a fixed `group.id` (fixed by using a fresh group ID + `auto.offset.reset: latest` by
+   default, with `--replay` opting into a fixed group + full history).
+
+**Full suite still green: 70/70**, `ruff check` clean on all touched/new files.
+
+**No new ADRs** — the REPLICA IDENTITY fix and Debezium version-naming fix are implementation
+corrections discovered by testing, not architectural decisions. ADR-005, ADR-006, ADR-018,
+ADR-019, ADR-024 all still active and unchanged.
+
+**Next:** Phase 4c — the Python consumer that lands these events in `RAW.retail.*` via `MERGE`,
+plus the `_cdc_loaded_at` column and the `order_events`/`payment_events` reconciliation check
+(PR #29) against Postgres's independent event log.
+
 ### 2026-07-01 — Phase 4.0 executed and validated live (same session)
 
 Wrote `lessons/phase-4/phase-4-plan.md` (overview across all 5 sub-phases) and

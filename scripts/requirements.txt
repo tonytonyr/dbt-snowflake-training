@@ -1,0 +1,5 @@
+# Dependencies for scripts/ tooling (Debezium connector registration, CDC tail,
+# and the Phase 4c reconciliation script). Separate from simulator/requirements.txt
+# and retail_analytics/requirements.txt — this tooling isn't part of either
+# component, it operates on the Kafka/Schema Registry/Snowflake boundary between them.
+confluent-kafka[avro,schemaregistry]>=2.3.0

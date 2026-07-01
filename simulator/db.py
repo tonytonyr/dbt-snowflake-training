@@ -240,19 +240,33 @@ class Database:
             self._ensure_publication()
 
     def _ensure_publication(self, name: str = "dbz_publication") -> None:
-        """Create the Debezium publication if it doesn't already exist.
+        """Create the Debezium publication if it doesn't already exist, and set
+        REPLICA IDENTITY FULL on the watched tables.
 
         Postgres has no `CREATE PUBLICATION IF NOT EXISTS` — existence is checked
         against pg_publication first. Watches orders, order_items, payments: the
         three tables Phase 4b's Debezium connector subscribes to (SPEC.md Phase 4
-        erratum — no `returns` table exists in this schema). REPLICA IDENTITY
-        DEFAULT (the Postgres default) is sufficient here — this schema has no
-        hard DELETEs anywhere in this module, so Debezium never needs a full
-        before-image for a tombstone.
+        erratum — no `returns` table exists in this schema).
+
+        Erratum (corrects the original Phase 4a reasoning): REPLICA IDENTITY
+        DEFAULT is *not* sufficient. That reasoning only considered DELETEs (this
+        schema has none, so tombstones were never a concern) — it missed that
+        DEFAULT also means Postgres's logical decoding emits `before: null` for
+        every UPDATE unless the primary key itself changes, regardless of
+        deletes. Confirmed empirically in Phase 4b: every UPDATE arrived at the
+        CDC consumer with a null before-image until these tables were switched to
+        REPLICA IDENTITY FULL, which makes Postgres include the complete old row
+        on every UPDATE. `ALTER TABLE ... REPLICA IDENTITY FULL` is itself
+        idempotent — safe to run on every bootstrap.
         """
         with self._get_conn() as conn:
             cursor = conn.cursor()
             try:
+                cursor.execute(
+                    "ALTER TABLE orders REPLICA IDENTITY FULL;"
+                    "ALTER TABLE order_items REPLICA IDENTITY FULL;"
+                    "ALTER TABLE payments REPLICA IDENTITY FULL;"
+                )
                 cursor.execute(
                     "SELECT 1 FROM pg_publication WHERE pubname = %s", (name,)
                 )

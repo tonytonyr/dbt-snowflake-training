@@ -786,27 +786,46 @@ DuckDB and Postgres.
 
 1. Register the Postgres source connector via the Kafka Connect REST API (`POST
    localhost:8083/connectors`): `plugin.name: pgoutput`, `slot.name`, `publication.name:
-   dbz_publication`, `table.include.list: public.orders,public.order_items,public.payments`
-   (corrected per the erratum above).
+   dbz_publication`, `publication.autocreate.mode: disabled` (the publication is already
+   created by `bootstrap_schema()` in 4a — fail loud if it's ever missing rather than
+   autocreate a mismatched one), `table.include.list: public.orders,public.order_items,
+   public.payments` (corrected per the erratum above), `snapshot.mode: never` (Debezium 2.5.x
+   naming — 3.x renamed this to `no_data`; only stream new changes, skip an initial snapshot
+   of the ~250K+ rows already in these tables from Phase 2's bulk load and Phase 4a's testing).
 2. `key.converter` / `value.converter`: `io.confluent.connect.avro.AvroConverter`,
    `*.schema.registry.url` pointed at the `schema-registry` service (per-connector override is
    redundant if already set at the worker level in 4.0, but set explicitly here for clarity).
 3. Set subject compatibility mode to `BACKWARD` for the three connector subjects via the
    Schema Registry REST API (`PUT /config/<subject>`).
-4. Validate topics: `<server>.public.orders`, `<server>.public.order_items`,
-   `<server>.public.payments` are created once stream mode (from 4a) starts producing writes.
+4. Validate topics: `retail.public.orders`, `retail.public.order_items`,
+   `retail.public.payments` are created once stream mode (from 4a) starts producing writes.
 5. Inspect one message per topic with `kafka-avro-console-consumer` — confirm the schema-ID
    wire prefix and the Debezium before/after payload envelope.
+6. **Erratum on top of 4a's `REPLICA IDENTITY DEFAULT is sufficient` reasoning:** it isn't.
+   That reasoning only considered DELETEs (this schema has none). `REPLICA IDENTITY DEFAULT`
+   also means every `UPDATE`'s `before` image is `null` regardless of deletes — confirmed
+   empirically once real messages were inspected. Fixed by switching `orders`, `order_items`,
+   `payments` to `REPLICA IDENTITY FULL` (now part of `db.py`'s `_ensure_publication`, so it's
+   applied on every bootstrap, not a one-off manual fix).
+7. **See the flow without Snowflake:** `scripts/cdc_tail.py` — a standalone consumer that
+   deserializes Avro against the registry and pretty-prints every `CREATE`/`UPDATE`/`DELETE`
+   (table, key, changed fields) live, so the CDC flow is directly observable before Phase 4c's
+   Snowflake consumer exists. A fresh consumer group per run (default: only new events from
+   now on; `--replay` opts into a fixed group + full history instead).
 
 **Key Concepts:**
 - Debezium event structure (before/after payloads, op codes: `c` / `u` / `d`)
-- Kafka topic naming: `<server>.<schema>.<table>`
+- Kafka topic naming: `<topic.prefix>.<schema>.<table>`
 - Avro schema definition and wire format (schema ID prefix + binary payload)
 - Schema Registry compatibility modes (`BACKWARD` / `FORWARD` / `FULL`) and what each permits
 - `pgoutput` as the native Postgres logical decoding plugin — no extension install required
+- `REPLICA IDENTITY FULL` vs `DEFAULT` — what Postgres actually captures in the WAL for an
+  `UPDATE`'s old row, independent of whether the table ever sees `DELETE`s
 
 **Deliverable:** Three Kafka topics receiving Avro-encoded CDC events as simulator stream mode
 (from 4a) runs. `curl localhost:8081/subjects` shows three registered subjects, all `BACKWARD`.
+`scripts/cdc_tail.py` shows real `CREATE`/`UPDATE` events with correct field-level diffs while
+stream mode runs, with no Snowflake connection involved.
 
 ---
 
